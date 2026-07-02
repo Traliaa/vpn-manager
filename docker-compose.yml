@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vpn-manager-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vpnmanager
+      POSTGRES_PASSWORD: vpnmanager
+      POSTGRES_DB: vpnmanager
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vpnmanager -d vpnmanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-manager
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "8080"
+      DATABASE_DSN: "postgres://vpnmanager:vpnmanager@postgres:5432/vpnmanager?sslmode=disable"
+      MIGRATIONS_DIR: "/migrations"
+      LOG_LEVEL: "debug"
+      VPN_BIN_DIR: "/usr/local/bin"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+
+volumes:
+  pgdata:

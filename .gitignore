@@ -1,0 +1,25 @@
+.env
+.env.*
+*.log
+tmp/
+
+# Go
+vpn-manager
+*.exe
+*.test
+*.out
+vendor/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# SQLC
+internal/db/*.go
+!internal/db/queries/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPN Manager</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+	<aside id="sidebar">
+		<div class="logo">VPN Manager</div>
+		<nav>
+			<a href="#dashboard" class="nav-item active" data-page="dashboard">📊 Дашборд</a>
+			<a href="#providers" class="nav-item" data-page="providers">🔌 Провайдеры</a>
+			<a href="#profiles" class="nav-item" data-page="profiles">📋 Профили</a>
+			<a href="#routing" class="nav-item" data-page="routing">🌐 Маршрутизация</a>
+		</nav>
+	</aside>
+	<main id="content">
+		<div id="page-dashboard" class="page active"></div>
+		<div id="page-providers" class="page"></div>
+		<div id="page-profiles" class="page"></div>
+		<div id="page-routing" class="page"></div>
+	</main>
+</div>
+
+<!-- Modal -->
+<div id="modal" class="modal hidden">
+	<div class="modal-content">
+		<div class="modal-header">
+			<h3 id="modal-title"></h3>
+			<button class="modal-close" onclick="closeModal()">&times;</button>
+		</div>
+		<div id="modal-body"></div>
+	</div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

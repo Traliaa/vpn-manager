@@ -1,0 +1,770 @@
+{
+	"info": {
+		"name": "VPN Manager API",
+		"description": "Коллекция для управления VPN Manager — провайдерами, профилями, правилами маршрутизации и статусами.\n\nБазовый URL: http://localhost:8080/api/v1\n\nСгенерировано: 2026-07-02",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health",
+			"description": "Проверка состояния сервиса и подключения к БД",
+			"item": [
+				{
+					"name": "GET Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						},
+						"description": "Проверка работоспособности сервиса и подключения к PostgreSQL"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"header": [{ "key": "Content-Type", "value": "application/json" }],
+							"body": "{\n  \"status\": \"ok\",\n  \"database\": \"connected\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Providers",
+			"description": "Управление VPN-провайдерами (WireGuard, AmneziaWG, VLESS, Hysteria2, TUIC, Shadowsocks)",
+			"item": [
+				{
+					"name": "LIST Providers",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						},
+						"description": "Получить список всех VPN-провайдеров"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"header": [{ "key": "Content-Type", "value": "application/json" }],
+							"body": "{\n  \"providers\": [\n    {\n      \"id\": \"uuid-1\",\n      \"name\": \"my-vless\",\n      \"provider_type\": \"vless\",\n      \"config\": {\"server\": \"example.com\", \"server_port\": 443, \"uuid\": \"...\"},\n      \"enabled\": true,\n      \"priority\": 100,\n      \"health_host\": null,\n      \"created_at\": \"2026-07-02T10:00:00Z\",\n      \"updated_at\": \"2026-07-02T10:00:00Z\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "CREATE Provider",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-vless\",\n  \"provider_type\": \"vless\",\n  \"config\": {\n    \"server\": \"example.com\",\n    \"server_port\": 443,\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"flow\": \"xtls-rprx-vision\",\n    \"tls\": {\n      \"enabled\": true,\n      \"server_name\": \"example.com\",\n      \"insecure\": false\n    }\n  },\n  \"enabled\": true,\n  \"priority\": 100,\n  \"health_host\": \"google.com\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						},
+						"description": "Создать нового VPN-провайдера"
+					},
+					"response": [
+						{
+							"name": "Created",
+							"status": "Created",
+							"code": 201,
+							"header": [{ "key": "Content-Type", "value": "application/json" }],
+							"body": "{\n  \"id\": \"uuid\",\n  \"name\": \"my-vless\",\n  \"provider_type\": \"vless\",\n  \"config\": {...},\n  \"enabled\": true,\n  \"priority\": 100,\n  \"health_host\": \"google.com\",\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}"
+						}
+					]
+				},
+				{
+					"name": "GET Provider",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/providers/{{provider_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["providers", "{{provider_id}}"]
+						},
+						"description": "Получить провайдера по ID"
+					}
+				},
+				{
+					"name": "UPDATE Provider",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-vless-updated\",\n  \"config\": {\n    \"server\": \"new-server.com\",\n    \"server_port\": 8443,\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\"\n  },\n  \"enabled\": true,\n  \"priority\": 50\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers/{{provider_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["providers", "{{provider_id}}"]
+						},
+						"description": "Обновить провайдера. Все поля опциональны — обновляются только переданные."
+					}
+				},
+				{
+					"name": "DELETE Provider",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/providers/{{provider_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["providers", "{{provider_id}}"]
+						},
+						"description": "Удалить провайдера"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"header": [{ "key": "Content-Type", "value": "application/json" }],
+							"body": "{\n  \"status\": \"deleted\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Profiles",
+			"description": "Управление профилями маршрутизации",
+			"item": [
+				{
+					"name": "LIST Profiles",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profiles",
+							"host": ["{{base_url}}"],
+							"path": ["profiles"]
+						},
+						"description": "Получить список всех профилей"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"profiles\": [\n    {\n      \"id\": \"uuid-1\",\n      \"name\": \"Рабочий\",\n      \"description\": \"Для работы\",\n      \"is_default\": true,\n      \"created_at\": \"...\",\n      \"updated_at\": \"...\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "CREATE Profile",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Рабочий\",\n  \"description\": \"Для работы и серфинга\",\n  \"is_default\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/profiles",
+							"host": ["{{base_url}}"],
+							"path": ["profiles"]
+						},
+						"description": "Создать новый профиль"
+					}
+				},
+				{
+					"name": "GET Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profiles/{{profile_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["profiles", "{{profile_id}}"]
+						}
+					}
+				},
+				{
+					"name": "UPDATE Profile",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Рабочий обновлённый\",\n  \"description\": \"Новое описание\",\n  \"is_default\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/profiles/{{profile_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["profiles", "{{profile_id}}"]
+						}
+					}
+				},
+				{
+					"name": "DELETE Profile",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profiles/{{profile_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["profiles", "{{profile_id}}"]
+						}
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"status\": \"deleted\"\n}"
+						}
+					]
+				},
+				{
+					"name": "ACTIVATE Profile",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profiles/{{profile_id}}/activate",
+							"host": ["{{base_url}}"],
+							"path": ["profiles", "{{profile_id}}", "activate"]
+						},
+						"description": "Активировать профиль маршрутизации. Применяет все правила профиля через sing-box."
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"status\": \"activated\"\n}"
+						}
+					]
+				},
+				{
+					"name": "LIST Rules by Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profiles/{{profile_id}}/rules",
+							"host": ["{{base_url}}"],
+							"path": ["profiles", "{{profile_id}}", "rules"]
+						},
+						"description": "Получить все правила маршрутизации для профиля"
+					}
+				}
+			]
+		},
+		{
+			"name": "Rules",
+			"description": "Управление правилами маршрутизации (CRUD независимо от профиля)",
+			"item": [
+				{
+					"name": "CREATE Rule",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"profile_id\": \"{{profile_id}}\",\n  \"provider_id\": \"{{provider_id}}\",\n  \"rule_type\": \"domain\",\n  \"value\": \"youtube.com\",\n  \"enabled\": true,\n  \"priority\": 100,\n  \"description\": \"YouTube через VPN\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/rules",
+							"host": ["{{base_url}}"],
+							"path": ["rules"]
+						},
+						"description": "Создать правило маршрутизации\n\nТипы правил:\n- domain — точное совпадение домена\n- domain_suffix — суффикс домена (.example.com)\n- domain_keyword — ключевое слово в домене\n- ip — IP-адрес\n- cidr — CIDR-диапазон\n- asn — номер AS (автономной системы)\n- geoip — гео-IP (код страны: ru, us, de)\n- geosite — гео-сайт (google, youtube, telegram)"
+					},
+					"response": [
+						{
+							"name": "Created",
+							"status": "Created",
+							"code": 201,
+							"body": "{\n  \"id\": \"uuid\",\n  \"profile_id\": \"uuid\",\n  \"provider_id\": \"uuid\",\n  \"rule_type\": \"domain\",\n  \"value\": \"youtube.com\",\n  \"enabled\": true,\n  \"priority\": 100,\n  \"description\": \"YouTube через VPN\",\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}"
+						}
+					]
+				},
+				{
+					"name": "GET Rule",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/rules/{{rule_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["rules", "{{rule_id}}"]
+						}
+					}
+				},
+				{
+					"name": "UPDATE Rule",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"value\": \"netflix.com\",\n  \"priority\": 50,\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/rules/{{rule_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["rules", "{{rule_id}}"]
+						},
+						"description": "Обновить правило. Все поля опциональны."
+					}
+				},
+				{
+					"name": "DELETE Rule",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/rules/{{rule_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["rules", "{{rule_id}}"]
+						}
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"status\": \"deleted\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "VPN",
+			"description": "Управление VPN-интерфейсами и синхронизация",
+			"item": [
+				{
+					"name": "LIST Interfaces",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vpn/interfaces",
+							"host": ["{{base_url}}"],
+							"path": ["vpn", "interfaces"]
+						},
+						"description": "Получить статусы всех зарегистрированных VPN-интерфейсов (runtime)"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"interfaces\": [\n    {\n      \"name\": \"my-vless\",\n      \"type\": \"vless\",\n      \"state\": \"up\",\n      \"tx_bytes\": 1024,\n      \"rx_bytes\": 2048,\n      \"last_handshake\": \"...\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "SYNC Providers",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vpn/sync",
+							"host": ["{{base_url}}"],
+							"path": ["vpn", "sync"]
+						},
+						"description": "Синхронизировать провайдеров из БД с VPN Manager"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"status\": \"synced\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Interfaces",
+			"description": "Просмотр интерфейсов (БД)",
+			"item": [
+				{
+					"name": "LIST Interfaces (DB)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/interfaces",
+							"host": ["{{base_url}}"],
+							"path": ["interfaces"]
+						},
+						"description": "Получить список интерфейсов из БД"
+					}
+				},
+				{
+					"name": "GET Interface by Name",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/interfaces/{{interface_name}}",
+							"host": ["{{base_url}}"],
+							"path": ["interfaces", "{{interface_name}}"]
+						},
+						"description": "Получить интерфейс по имени"
+					}
+				}
+			]
+		},
+		{
+			"name": "Health Checks",
+			"description": "История проверок здоровья провайдеров",
+			"item": [
+				{
+					"name": "LIST Health Checks",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health-checks/{{provider_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["health-checks", "{{provider_id}}"]
+						},
+						"description": "Получить историю проверок здоровья провайдера (последние 50 записей)"
+					}
+				}
+			]
+		},
+		{
+			"name": "Routing",
+			"description": "Управление активной маршрутизацией",
+			"item": [
+				{
+					"name": "Routing Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/routing/status",
+							"host": ["{{base_url}}"],
+							"path": ["routing", "status"]
+						},
+						"description": "Получить статус текущей маршрутизации и активный профиль"
+					},
+					"response": [
+						{
+							"name": "Active",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"active\": true,\n  \"profile\": {\n    \"id\": \"uuid\",\n    \"name\": \"Рабочий\",\n    \"description\": \"...\",\n    \"is_default\": true,\n    \"created_at\": \"...\",\n    \"updated_at\": \"...\"\n  }\n}"
+						},
+						{
+							"name": "Inactive",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"active\": false,\n  \"profile\": null\n}"
+						}
+					]
+				},
+				{
+					"name": "Deactivate Routing",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/routing/deactivate",
+							"host": ["{{base_url}}"],
+							"path": ["routing", "deactivate"]
+						},
+						"description": "Деактивировать маршрутизацию — весь трафик пойдёт напрямую (direct)"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"status\": \"deactivated\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Reapply Routing",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/routing/reapply",
+							"host": ["{{base_url}}"],
+							"path": ["routing", "reapply"]
+						},
+						"description": "Переприменить активный профиль (после изменений правил/провайдеров)"
+					},
+					"response": [
+						{
+							"name": "OK",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"status\": \"reapplied\"\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Примеры конфигов провайдеров",
+			"description": "Шаблоны конфигураций для разных типов провайдеров",
+			"item": [
+				{
+					"name": "CREATE WireGuard",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-wireguard\",\n  \"provider_type\": \"wireguard\",\n  \"config\": {\n    \"private_key\": \"uAlnLJZiP34ggtfIlzAdsGP2R/4Uyecp+N4권8cd6k=\",\n    \"server_public_key\": \"7O7kLI9Yp1xK4l/L4aT8fRv6Gm2gWcQzR3j5nV8sBms=\",\n    \"endpoint\": \"vpn.example.com:51820\",\n    \"address\": \"10.0.0.2/32\",\n    \"dns\": \"1.1.1.1\"\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				},
+				{
+					"name": "CREATE AmneziaWG",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-amneziawg\",\n  \"provider_type\": \"amneziawg\",\n  \"config\": {\n    \"private_key\": \"uAlnLJZiP34ggtfIlzAdsGP2R/4Uyecp+N4권8cd6k=\",\n    \"server_public_key\": \"7O7kLI9Yp1xK4l/L4aT8fRv6Gm2gWcQzR3j5nV8sBms=\",\n    \"endpoint\": \"vpn.example.com:51820\",\n    \"address\": \"10.0.0.2/32\",\n    \"dns\": \"1.1.1.1\",\n    \"junk_packet_count\": 10,\n    \"init_packet_junk\": 20\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				},
+				{
+					"name": "CREATE VLESS",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-vless\",\n  \"provider_type\": \"vless\",\n  \"config\": {\n    \"server\": \"vpn.example.com\",\n    \"server_port\": 443,\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"flow\": \"xtls-rprx-vision\",\n    \"packet_encoding\": \"xudp\",\n    \"tls\": {\n      \"enabled\": true,\n      \"server_name\": \"vpn.example.com\",\n      \"insecure\": false,\n      \"alpn\": [\"h2\", \"http/1.1\"]\n    },\n    \"multiplex\": {\n      \"enabled\": true,\n      \"protocol\": \"h2mux\",\n      \"max_connections\": 8\n    }\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				},
+				{
+					"name": "CREATE Hysteria2",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-hysteria2\",\n  \"provider_type\": \"hysteria2\",\n  \"config\": {\n    \"server\": \"vpn.example.com\",\n    \"server_port\": 443,\n    \"password\": \"my-secret-password\",\n    \"sni\": \"vpn.example.com\",\n    \"insecure\": false,\n    \"up_mbps\": 100,\n    \"down_mbps\": 500\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				},
+				{
+					"name": "CREATE TUIC",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-tuic\",\n  \"provider_type\": \"tuic\",\n  \"config\": {\n    \"server\": \"vpn.example.com\",\n    \"server_port\": 443,\n    \"password\": \"my-password\",\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"congestion_control\": \"bbr\",\n    \"udp_relay_mode\": \"native\",\n    \"sni\": \"vpn.example.com\",\n    \"insecure\": false\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				},
+				{
+					"name": "CREATE Shadowsocks",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-ss\",\n  \"provider_type\": \"shadowsocks\",\n  \"config\": {\n    \"server\": \"vpn.example.com\",\n    \"server_port\": 8443,\n    \"method\": \"aes-256-gcm\",\n    \"password\": \"my-password\"\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Типовой сценарий: полный цикл",
+			"description": "Последовательность запросов для полного цикла настройки маршрутизации",
+			"item": [
+				{
+					"name": "1. Создать провайдера",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-proxy\",\n  \"provider_type\": \"vless\",\n  \"config\": {\n    \"server\": \"vpn.example.com\",\n    \"server_port\": 443,\n    \"uuid\": \"550e8400-e29b-41d4-a716-446655440000\"\n  },\n  \"enabled\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/providers",
+							"host": ["{{base_url}}"],
+							"path": ["providers"]
+						}
+					}
+				},
+				{
+					"name": "2. Создать профиль (по умолчанию)",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Основной\",\n  \"description\": \"Автоматически создан\",\n  \"is_default\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/profiles",
+							"host": ["{{base_url}}"],
+							"path": ["profiles"]
+						}
+					}
+				},
+				{
+					"name": "3. Создать правило (domain)",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"profile_id\": \"{{profile_id}}\",\n  \"provider_id\": \"{{provider_id}}\",\n  \"rule_type\": \"domain_suffix\",\n  \"value\": \".youtube.com\",\n  \"enabled\": true,\n  \"priority\": 100,\n  \"description\": \"YouTube через VPN\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/rules",
+							"host": ["{{base_url}}"],
+							"path": ["rules"]
+						}
+					}
+				},
+				{
+					"name": "4. Создать правило (geoip)",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"profile_id\": \"{{profile_id}}\",\n  \"provider_id\": \"{{provider_id}}\",\n  \"rule_type\": \"geoip\",\n  \"value\": \"ru\",\n  \"enabled\": false,\n  \"priority\": 900,\n  \"description\": \"Российские сайты в обход VPN\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/rules",
+							"host": ["{{base_url}}"],
+							"path": ["rules"]
+						}
+					}
+				},
+				{
+					"name": "5. Синхронизировать провайдеров",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vpn/sync",
+							"host": ["{{base_url}}"],
+							"path": ["vpn", "sync"]
+						}
+					}
+				},
+				{
+					"name": "6. Активировать профиль",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profiles/{{profile_id}}/activate",
+							"host": ["{{base_url}}"],
+							"path": ["profiles", "{{profile_id}}", "activate"]
+						}
+					}
+				},
+				{
+					"name": "7. Проверить статус",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/routing/status",
+							"host": ["{{base_url}}"],
+							"path": ["routing", "status"]
+						}
+					}
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8080/api/v1",
+			"type": "string"
+		},
+		{
+			"key": "provider_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "profile_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "rule_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "interface_name",
+			"value": "",
+			"type": "string"
+		}
+	]
+}

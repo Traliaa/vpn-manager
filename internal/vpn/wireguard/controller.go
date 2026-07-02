@@ -1,0 +1,223 @@
+package wireguard
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/netip"
+	"time"
+
+	"github.com/Traliaa/vpn-manager/internal/vpn"
+	"go.uber.org/zap"
+	"golang.zx2c4.com/wireguard/wgctrl"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+)
+
+// Config представляет конфигурацию WireGuard-интерфейса.
+type Config struct {
+	PrivateKey string     `json:"private_key"`
+	Address    string     `json:"address"`
+	DNS        string     `json:"dns,omitempty"`
+	ListenPort int        `json:"listen_port,omitempty"`
+	MTU        int        `json:"mtu,omitempty"`
+	Peer       PeerConfig `json:"peer"`
+}
+
+// PeerConfig представляет конфигурацию пира.
+type PeerConfig struct {
+	PublicKey           string   `json:"public_key"`
+	PresharedKey        string   `json:"preshared_key,omitempty"`
+	Endpoint            string   `json:"endpoint"`
+	AllowedIPs          []string `json:"allowed_ips"`
+	PersistentKeepalive int      `json:"persistent_keepalive,omitempty"`
+}
+
+// Controller управляет WireGuard-интерфейсом.
+type Controller struct {
+	name   string
+	cfg    Config
+	logger *zap.Logger
+	client *wgctrl.Client
+}
+
+// NewController создаёт WireGuard-контроллер.
+func NewController(name string, cfg Config, logger *zap.Logger) (*Controller, error) {
+	client, err := wgctrl.New()
+	if err != nil {
+		return nil, fmt.Errorf("create wgctrl client: %w", err)
+	}
+
+	return &Controller{
+		name:   name,
+		cfg:    cfg,
+		logger: logger.With(zap.String("interface", name), zap.String("type", "wireguard")),
+		client: client,
+	}, nil
+}
+
+func (c *Controller) Type() vpn.ProviderType { return vpn.ProviderWireGuard }
+func (c *Controller) Name() string           { return c.name }
+
+// ApplyConfig создаёт или обновляет WireGuard-интерфейс.
+func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
+	switch v := cfg.(type) {
+	case Config:
+		c.cfg = v
+	case *Config:
+		if v != nil {
+			c.cfg = *v
+		}
+	default:
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			return fmt.Errorf("invalid config type: %T", cfg)
+		}
+		if err := json.Unmarshal(data, &c.cfg); err != nil {
+			return fmt.Errorf("unmarshal wg config: %w", err)
+		}
+	}
+
+	c.logger.Info("applying WireGuard configuration",
+		zap.String("endpoint", c.cfg.Peer.Endpoint),
+		zap.Strings("allowed_ips", c.cfg.Peer.AllowedIPs),
+	)
+
+	privKey, err := wgtypes.ParseKey(c.cfg.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("invalid private key: %w", err)
+	}
+	pubKey, err := wgtypes.ParseKey(c.cfg.Peer.PublicKey)
+	if err != nil {
+		return fmt.Errorf("invalid peer public key: %w", err)
+	}
+
+	// Парсим AllowedIPs в []net.IPNet (требование wgctrl)
+	allowedIPs := make([]net.IPNet, 0, len(c.cfg.Peer.AllowedIPs))
+	for _, s := range c.cfg.Peer.AllowedIPs {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return fmt.Errorf("invalid allowed IP %q: %w", s, err)
+		}
+		masked := p.Masked()
+		allowedIPs = append(allowedIPs, net.IPNet{
+			IP:   masked.Addr().AsSlice(),
+			Mask: net.CIDRMask(masked.Bits(), masked.Addr().BitLen()),
+		})
+	}
+
+	// Резолвим endpoint
+	var endpoint *net.UDPAddr
+	if c.cfg.Peer.Endpoint != "" {
+		host, portStr, err := net.SplitHostPort(c.cfg.Peer.Endpoint)
+		if err != nil {
+			return fmt.Errorf("invalid endpoint %q: %w", c.cfg.Peer.Endpoint, err)
+		}
+		port, err := net.LookupPort("udp", portStr)
+		if err != nil {
+			return fmt.Errorf("invalid port %q: %w", portStr, err)
+		}
+		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		if err != nil {
+			return fmt.Errorf("resolve endpoint %q: %w", host, err)
+		}
+		if len(ips) > 0 {
+			endpoint = net.UDPAddrFromAddrPort(netip.AddrPortFrom(ips[0], uint16(port)))
+		}
+	}
+
+	var keepalive *time.Duration
+	if c.cfg.Peer.PersistentKeepalive > 0 {
+		v := time.Duration(c.cfg.Peer.PersistentKeepalive) * time.Second
+		keepalive = &v
+	}
+
+	peerCfg := wgtypes.PeerConfig{
+		PublicKey:                   pubKey,
+		Endpoint:                    endpoint,
+		AllowedIPs:                  allowedIPs,
+		PersistentKeepaliveInterval: keepalive,
+		ReplaceAllowedIPs:           true,
+	}
+	if c.cfg.Peer.PresharedKey != "" {
+		psk, err := wgtypes.ParseKey(c.cfg.Peer.PresharedKey)
+		if err != nil {
+			return fmt.Errorf("invalid preshared key: %w", err)
+		}
+		peerCfg.PresharedKey = &psk
+	}
+
+	deviceCfg := wgtypes.Config{
+		PrivateKey:   &privKey,
+		ReplacePeers: true,
+		Peers:        []wgtypes.PeerConfig{peerCfg},
+	}
+
+	if err := c.client.ConfigureDevice(c.name, deviceCfg); err != nil {
+		return fmt.Errorf("configure device %s: %w", c.name, err)
+	}
+
+	c.logger.Info("WireGuard configuration applied")
+	return nil
+}
+
+// Remove очищает конфигурацию интерфейса.
+func (c *Controller) Remove(ctx context.Context) error {
+	c.logger.Info("removing WireGuard interface")
+	if c.client != nil {
+		_ = c.client.ConfigureDevice(c.name, wgtypes.Config{
+			ReplacePeers: true,
+			Peers:        []wgtypes.PeerConfig{},
+		})
+	}
+	return nil
+}
+
+// Status возвращает состояние WireGuard-интерфейса.
+func (c *Controller) Status(ctx context.Context) (*vpn.InterfaceStatus, error) {
+	if c.client == nil {
+		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown}, nil
+	}
+
+	dev, err := c.client.Device(c.name)
+	if err != nil {
+		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateError},
+			fmt.Errorf("get device status: %w", err)
+	}
+	if dev == nil {
+		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown}, nil
+	}
+
+	status := &vpn.InterfaceStatus{
+		Name:      c.name,
+		Type:      c.Type(),
+		State:     vpn.StateUp,
+		PublicKey: dev.PublicKey.String(),
+	}
+	if len(dev.Peers) > 0 {
+		peer := dev.Peers[0]
+		if peer.Endpoint != nil {
+			status.Endpoint = peer.Endpoint.String()
+		}
+		status.TxBytes = peer.TransmitBytes
+		status.RxBytes = peer.ReceiveBytes
+		if !peer.LastHandshakeTime.IsZero() {
+			status.LastHandshake = peer.LastHandshakeTime
+		}
+	}
+	return status, nil
+}
+
+// HealthCheck проверяет доступность интерфейса.
+func (c *Controller) HealthCheck(ctx context.Context) error {
+	_, err := c.Status(ctx)
+	return err
+}
+
+// Close освобождает wgctrl.
+func (c *Controller) Close() error {
+	if c.client != nil {
+		c.client.Close()
+	}
+	return nil
+}
