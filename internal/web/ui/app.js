@@ -87,8 +87,11 @@ function closeModal() {
 	document.getElementById('modal').classList.add('hidden');
 }
 
-// Close modal on Escape
+// Close modal on Escape and click outside
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.getElementById('modal').addEventListener('click', e => {
+	if (e.target === document.getElementById('modal')) closeModal();
+});
 
 // ============================================================
 // Dashboard
@@ -165,14 +168,15 @@ async function renderProviders() {
 
 		document.getElementById('providers-list').innerHTML = `
 			<div class="card"><table>
-				<thead><tr><th>Имя</th><th>Тип</th><th>Включён</th><th>Приоритет</th><th></th></tr></thead>
+				<thead><tr><th>Имя</th><th>Тип</th><th></th><th>Приоритет</th><th></th></tr></thead>
 				<tbody>${providers.map(p => `
 					<tr>
 						<td>${esc(p.name)}</td>
 						<td>${esc(p.provider_type)}</td>
-						<td>${p.enabled ? '✅' : '❌'}</td>
+						<td><span class="badge badge-${p.enabled ? 'up' : 'down'}" style="cursor:pointer" onclick="toggleProvider('${p.id}', ${!p.enabled})">${p.enabled ? '🟢 Вкл' : '🔴 Выкл'}</span></td>
 						<td>${p.priority}</td>
 						<td>
+							<button class="btn btn-sm btn-ghost" onclick="toggleProvider('${p.id}', ${!p.enabled})" title="${p.enabled ? 'Выключить' : 'Включить'}">${p.enabled ? '⏹' : '▶️'}</button>
 							<button class="btn btn-sm btn-ghost" onclick="showEditProvider('${p.id}')">✏️</button>
 							<button class="btn btn-sm btn-danger" onclick="deleteProvider('${p.id}','${esc(p.name)}')">🗑</button>
 						</td>
@@ -405,6 +409,18 @@ async function deleteProvider(id, name) {
 	try {
 		await apiDelete('/providers/' + id);
 		toast('Провайдер удалён');
+		renderProviders();
+	} catch (e) {
+		toast('Ошибка: ' + e.message, 'error');
+	}
+}
+
+async function toggleProvider(id, enabled) {
+	try {
+		await apiPut('/providers/' + id, { enabled });
+		toast(enabled ? '✅ Провайдер включён' : '⏹ Провайдер выключен');
+		// Синхронизируем чтобы применить изменения
+		try { await apiPost('/vpn/sync'); } catch (_) {}
 		renderProviders();
 	} catch (e) {
 		toast('Ошибка: ' + e.message, 'error');
