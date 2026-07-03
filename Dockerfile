@@ -3,16 +3,14 @@ FROM node:22-bookworm-slim AS frontend
 
 WORKDIR /src
 
-COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/package.json frontend/.npmrc ./
 
-RUN npm install -g npm@11.18.0
-
-RUN npm install
+RUN npm install --package-lock-only --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 COPY frontend/ .
 
 RUN npm run build
-
 # Stage 2: Go build
 FROM golang:1.26-alpine AS builder
 
