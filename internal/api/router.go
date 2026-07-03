@@ -31,6 +31,7 @@ func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *H
 		r.Route("/providers", func(r chi.Router) {
 			r.Get("/", h.ListProviders)
 			r.Post("/", h.CreateProvider)
+			r.Post("/import", h.ImportConfig)
 			r.Get("/{id}", h.GetProvider)
 			r.Put("/{id}", h.UpdateProvider)
 			r.Delete("/{id}", h.DeleteProvider)

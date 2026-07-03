@@ -152,7 +152,7 @@ async function renderDashboard() {
 // ============================================================
 async function renderProviders() {
 	const el = document.getElementById('page-providers');
-	el.innerHTML = '<h1>🔌 Провайдеры</h1><div class="btn-group"><button class="btn btn-primary" onclick="showCreateProvider()">+ Добавить</button><button class="btn btn-ghost" onclick="syncProviders()">🔄 Синхронизировать</button></div><div id="providers-list"><div class="spinner"></div></div>';
+	el.innerHTML = '<h1>🔌 Провайдеры</h1><div class="btn-group"><button class="btn btn-primary" onclick="showCreateProvider()">+ Добавить</button><button class="btn btn-ghost" onclick="showImportConfig()">📂 Загрузить .conf</button><button class="btn btn-ghost" onclick="syncProviders()">🔄 Синхронизировать</button></div><div id="providers-list"><div class="spinner"></div></div>';
 
 	try {
 		const data = await apiGet('/providers');
@@ -192,6 +192,77 @@ async function syncProviders() {
 		renderProviders();
 	} catch (e) {
 		toast('Ошибка синхронизации: ' + e.message, 'error');
+	}
+}
+
+function showImportConfig() {
+	openModal('📂 Импорт .conf', `
+		<p>Загрузите WireGuard или AmneziaWG конфиг-файл. Тип провайдера определится автоматически.</p>
+		<div class="form-group">
+			<label>Файл конфигурации (.conf)</label>
+			<input id="import-file" type="file" accept=".conf,.txt" style="display:block;margin-top:4px">
+		</div>
+		<div class="form-group">
+			<label>Или вставьте текст конфига</label>
+			<textarea id="import-text" placeholder="[Interface]
+PrivateKey = ...
+Address = 10.0.0.2/32
+
+[Peer]
+PublicKey = ...
+Endpoint = example.com:51820
+AllowedIPs = 0.0.0.0/0" rows="6"></textarea>
+		</div>
+		<div class="form-group">
+			<label>Название провайдера (оставьте пустым для автогенерации)</label>
+			<input id="import-name" placeholder="my-vpn">
+		</div>
+		<button class="btn btn-primary" onclick="importConfig()">📂 Импортировать</button>
+	`);
+}
+
+async function importConfig() {
+	const fileInput = document.getElementById('import-file');
+	const textArea = document.getElementById('import-text');
+	const name = document.getElementById('import-name').value.trim();
+	const file = fileInput.files?.[0];
+
+	let formData;
+
+	if (file) {
+		formData = new FormData();
+		formData.append('config_file', file);
+		if (name) formData.append('name', name);
+	} else if (textArea.value.trim()) {
+		// JSON mode — apiPost handles JSON.stringify
+		formData = null;
+	} else {
+		toast('Выберите файл или введите текст конфига', 'error');
+		return;
+	}
+
+	try {
+		let result;
+		if (file) {
+			const r = await fetch('/api/v1/providers/import', {
+				method: 'POST',
+				body: formData,
+			});
+			if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
+			result = await r.json();
+		} else {
+			result = await apiPost('/providers/import', {
+				config_text: textArea.value.trim(),
+				name: name || undefined,
+			});
+		}
+
+		const detected = result.detected || '';
+		toast('✅ Провайдер импортирован (определён как ' + detected + ')');
+		closeModal();
+		renderProviders();
+	} catch (e) {
+		toast('Ошибка импорта: ' + e.message, 'error');
 	}
 }
 
