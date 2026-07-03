@@ -1,8 +1,8 @@
 # Stage 1: Svelte frontend build
-FROM node:22-alpine AS frontend
+FROM node:22-bookworm-slim AS frontend
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY frontend/ .
 RUN npm run build
 
