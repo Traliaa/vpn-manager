@@ -1,8 +1,16 @@
 # Stage 1: Svelte frontend build
 FROM node:22-bookworm-slim AS frontend
+
 WORKDIR /src
+
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install -g npm@11.18.0 && npm ci --no-audit --no-fundCOPY frontend/ .
+
+RUN npm install -g npm@11.18.0
+
+RUN npm install
+
+COPY frontend/ .
+
 RUN npm run build
 
 # Stage 2: Go build
