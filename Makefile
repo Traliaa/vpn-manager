@@ -41,9 +41,24 @@ restart: down up
 # Разработка локально
 # ============================================================================
 
-# Собрать бинарник
-build:
+# ============================================================================
+# Сборка
+# ============================================================================
+
+# Собрать бинарник (включает сборку фронтенда)
+build: frontend-build
 	go build -o $(BIN_OUT) $(CMD_DIR)
+
+# Собрать только бэкенд (без фронтенда)
+build-backend:
+	go build -o $(BIN_OUT) $(CMD_DIR)
+
+# Собрать фронтенд (Svelte)
+.PHONY: frontend-build
+frontend-build:
+	cd frontend && npm ci --silent 2>/dev/null; npm run build
+	rm -rf internal/web/ui
+	cp -r frontend/dist internal/web/ui
 
 # Запустить локально (БД должна быть поднята)
 run:
