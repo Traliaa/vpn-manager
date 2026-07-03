@@ -98,16 +98,18 @@ document.getElementById('modal').addEventListener('click', e => {
 // ============================================================
 async function renderDashboard() {
 	const el = document.getElementById('page-dashboard');
-	el.innerHTML = '<h1>📊 Дашборд</h1><div class="card-row" id="dash-cards"></div><div id="dash-providers"></div><div id="dash-routing"></div>';
+	el.innerHTML = '<h1>📊 Дашборд</h1><div class="card-row" id="dash-cards"></div><div id="dash-quick"></div><div id="dash-providers"></div><div id="dash-routing"></div>';
 
 	try {
-		const [vpnData, routingData, healthData] = await Promise.all([
+		const [vpnData, routingData, healthData, provData] = await Promise.all([
 			apiGet('/vpn/interfaces'),
 			apiGet('/routing/status'),
 			apiGet('/health'),
+			apiGet('/providers'),
 		]);
 
 		const interfaces = vpnData.interfaces || [];
+		const providers = provData.providers || [];
 
 		// Status cards
 		const up = interfaces.filter(i => i.state === 'up').length;
@@ -120,6 +122,24 @@ async function renderDashboard() {
 			<div class="card"><div class="card-title">Неактивны</div><div class="card-value ${down > 0 ? 'status-down' : ''}">${down}</div></div>
 			<div class="card"><div class="card-title">База данных</div><div class="card-value ${healthData.database === 'connected' ? 'status-up' : 'status-error'}">${healthData.database || 'unknown'}</div></div>
 		`;
+
+		// Quick route section
+		const quickHtml = providers.length ? `
+			<h2>⚡ Быстрая маршрутизация</h2>
+			<div class="card">
+				<div class="quick-route">
+					<input id="qr-domain" type="text" placeholder="Введите сайт, например youtube.com" style="flex:1;padding:8px;border:1px solid #444;border-radius:6px;background:#2a2a2a;color:#fff;font-size:14px">
+					<select id="qr-provider" style="padding:8px;border:1px solid #444;border-radius:6px;background:#2a2a2a;color:#fff;font-size:14px">
+						<option value="">Выберите VPN</option>
+						${providers.filter(p => p.enabled).map(p => `<option value="${p.id}">${esc(p.name)} (${p.provider_type})</option>`).join('')}
+					</select>
+					<button class="btn btn-primary" onclick="addQuickRoute()">➕ Добавить</button>
+				</div>
+				<div id="qr-last" style="margin-top:8px;font-size:13px;color:#999"></div>
+			</div>
+		` : '';
+
+		document.getElementById('dash-quick').innerHTML = quickHtml;
 
 		// Provider status table
 		if (interfaces.length) {
@@ -136,18 +156,75 @@ async function renderDashboard() {
 			document.getElementById('dash-providers').innerHTML = '<div class="card"><div class="empty">Нет зарегистрированных провайдеров</div></div>';
 		}
 
-		// Routing status
+		// Routing status with quick controls
 		const active = routingData.active;
 		document.getElementById('dash-routing').innerHTML = `
 			<h2>Маршрутизация</h2>
 			<div class="card">
 				<p>Статус: <strong>${active ? '✅ Активен' : '⏸ Неактивен'}</strong></p>
 				${active && routingData.profile ? `<p>Профиль: <strong>${esc(routingData.profile.name)}</strong></p>` : ''}
+				<div style="margin-top:8px">
+					${active ? `<button class="btn btn-sm btn-danger" onclick="quickDeactivate()">⏹ Выключить</button>` : ''}
+				</div>
 			</div>
 		`;
 	} catch (e) {
 		el.innerHTML += `<div class="card"><p class="status-error">Ошибка загрузки: ${esc(e.message)}</p></div>`;
 	}
+}
+
+// Quick add route: creates profile if needed, adds rule, activates
+async function addQuickRoute() {
+	const domain = document.getElementById('qr-domain').value.trim();
+	const providerId = document.getElementById('qr-provider').value;
+
+	if (!domain) { toast('Введите сайт', 'error'); return; }
+	if (!providerId) { toast('Выберите VPN', 'error'); return; }
+
+	try {
+		// 1. Find or create "Default" profile
+		let profiles = (await apiGet('/profiles')).profiles || [];
+		let profile = profiles.find(p => p.name === 'Default');
+
+		if (!profile) {
+			profile = await apiPost('/profiles', {
+				name: 'Default',
+				description: 'Авто-профиль для быстрой маршрутизации',
+				is_default: true,
+			});
+			toast('📋 Создан профиль "Default"');
+		}
+
+		// 2. Add rule
+		await apiPost('/rules', {
+			profile_id: profile.id,
+			provider_id: providerId,
+			rule_type: 'domain',
+			value: domain,
+			enabled: true,
+		});
+
+		// 3. Activate profile
+		await apiPost('/profiles/' + profile.id + '/activate');
+
+		document.getElementById('qr-last').textContent = `✅ ${domain} → VPN (маршрутизация активна)`;
+		document.getElementById('qr-domain').value = '';
+		toast(`✅ ${domain} добавлен в маршрутизацию`);
+		renderDashboard();
+	} catch (e) {
+		toast('Ошибка: ' + e.message, 'error');
+	}
+}
+
+async function quickDeactivate() {
+	try {
+		await apiPost('/routing/deactivate');
+		toast('⏹ Маршрутизация выключена');
+		renderDashboard();
+	} catch (e) {
+		toast('Ошибка: ' + e.message, 'error');
+	}
+}
 }
 
 // ============================================================
