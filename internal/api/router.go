@@ -3,7 +3,6 @@ package api
 import (
 	"time"
 
-	"github.com/Traliaa/vpn-manager/internal/web"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -78,9 +77,6 @@ func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *H
 			r.Post("/activate/{id}", haH.Activate)
 		})
 	})
-
-	// SPA — все остальные пути отдают index.html
-	r.Handle("/*", web.NewSPAHandler())
 
 	return r
 }
