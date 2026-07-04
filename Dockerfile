@@ -1,17 +1,3 @@
-# Stage 1: Svelte frontend build
-FROM node:22-bookworm-slim AS frontend
-
-WORKDIR /src
-
-COPY frontend/package.json frontend/.npmrc ./
-
-RUN npm install --package-lock-only --no-audit --no-fund
-RUN npm ci --no-audit --no-fund
-
-COPY frontend/ .
-
-RUN npm run build
-# Stage 2: Go build
 FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
@@ -20,13 +6,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy built frontend into the Go embed directory
-COPY --from=frontend /src/dist /src/internal/web/ui
-
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/vpn-manager ./cmd/vpn-manager
 
-# Stage 3: Runtime
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata iproute2 iptables nftables
