@@ -43,6 +43,14 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.build
+    container_name: vpn-manager-frontend
+    volumes:
+      - frontend-dist:/dist
+
   nginx:
     image: nginx:alpine
     container_name: vpn-manager-nginx
@@ -51,10 +59,14 @@ services:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - frontend-dist:/usr/share/nginx/html:ro
       - /etc/localtime:/etc/localtime:ro
     depends_on:
-      - app
+      frontend:
+        condition: service_completed_successfully
+      app:
+        condition: service_started
 
 volumes:
   pgdata:
+  frontend-dist:
