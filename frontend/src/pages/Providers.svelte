@@ -1,10 +1,13 @@
 <script>
+  import { onMount } from 'svelte';
   import { get, post, put, del, uploadFile } from '../lib/api.js';
   import { showToast } from '../lib/stores.js';
   import { fade, slide } from 'svelte/transition';
 
   let providers = [];
   let loading = true;
+
+  onMount(load);
 
   // Modal state
   let showModal = false;

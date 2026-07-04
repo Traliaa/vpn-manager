@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { get, post, put, del } from '../lib/api.js';
   import { showToast, navigate } from '../lib/stores.js';
   import { fade, slide } from 'svelte/transition';
@@ -6,6 +7,8 @@
   let profiles = [];
   let activeProfileId = null;
   let loading = true;
+
+  onMount(load);
 
   // Modal state
   let showModal = false;

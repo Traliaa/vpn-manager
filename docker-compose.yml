@@ -34,6 +34,10 @@ services:
       MIGRATIONS_DIR: "/migrations"
       LOG_LEVEL: "debug"
       VPN_BIN_DIR: "/usr/local/bin"
+      SINGBOX_CONFIG_PATH: "/etc/sing-box/config.json"
+      SINGBOX_BINARY_PATH: "sing-box"
+      SINGBOX_API_URL: "http://127.0.0.1:9090"
+      SINGBOX_API_ENABLED: "false"
     depends_on:
       postgres:
         condition: service_healthy

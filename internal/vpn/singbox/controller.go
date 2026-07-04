@@ -216,6 +216,12 @@ func (c *Controller) applyConfigLocked(ctx context.Context) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
+	// Ensure the config directory exists
+	configDir := filepath.Dir(c.configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("create config dir %s: %w", configDir, err)
+	}
+
 	// Backup current config first
 	if err := c.backupConfig(); err != nil {
 		c.logger.Warn("config backup failed (non-fatal)", zap.Error(err))
