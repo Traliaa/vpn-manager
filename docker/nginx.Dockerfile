@@ -1,0 +1,10 @@
+FROM node:22-alpine AS frontend-builder
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=frontend-builder /src/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
