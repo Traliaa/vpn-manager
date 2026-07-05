@@ -25,6 +25,9 @@
       <button class="nav-item" class:active={$currentPage === 'routing'} onclick={() => navigate('routing')}>
         <span class="nav-icon">🌐</span> Маршрутизация
       </button>
+      <a href="/uptime/" target="_blank" class="nav-item" rel="noreferrer">
+        <span class="nav-icon">📊</span> Мониторинг ↗
+      </a>
     </nav>
     <div class="sidebar-footer">
       <div class="status-dot" aria-label="Система работает"></div>
@@ -97,6 +100,7 @@
     text-align: left;
     width: 100%;
     font-family: inherit;
+    text-decoration: none;
   }
   .nav-item:hover { background: rgba(124, 92, 252, 0.08); color: #ccc; }
   .nav-item.active {

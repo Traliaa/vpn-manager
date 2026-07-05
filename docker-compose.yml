@@ -59,5 +59,15 @@ services:
       app:
         condition: service_started
 
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: vpn-manager-uptime
+    restart: unless-stopped
+    expose:
+      - "3001"
+    volumes:
+      - uptime-kuma-data:/app/data
+
 volumes:
   pgdata:
+  uptime-kuma-data:

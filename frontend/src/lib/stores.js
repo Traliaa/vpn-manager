@@ -13,16 +13,21 @@ export function showToast(msg, type = 'success') {
 }
 
 export function navigate(page) {
-  currentPage.set(page);
+  const base = page.split('?')[0];
+  currentPage.set(base);
   window.location.hash = '#' + page;
 }
 
 // Restore hash on load
 if (typeof window !== 'undefined') {
   const hash = window.location.hash.replace('#', '');
-  if (hash) currentPage.set(hash);
+  if (hash) {
+    const base = hash.split('?')[0];
+    currentPage.set(base);
+  }
   window.addEventListener('hashchange', () => {
     const h = window.location.hash.replace('#', '');
-    if (h) currentPage.set(h);
+    const base = h.split('?')[0];
+    if (h) currentPage.set(base);
   });
 }

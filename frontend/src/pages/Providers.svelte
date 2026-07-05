@@ -126,7 +126,6 @@
     try {
       await put('/providers/' + id, { enabled });
       showToast(enabled ? '✅ Включён' : '⏹ Выключен');
-      try { await post('/vpn/sync'); } catch (_) {}
       load();
     } catch (e) {
       showToast('Ошибка: ' + e.message, 'error');
@@ -138,16 +137,6 @@
     try {
       await del('/providers/' + id);
       showToast('🗑 Провайдер удалён');
-      load();
-    } catch (e) {
-      showToast('Ошибка: ' + e.message, 'error');
-    }
-  }
-
-  async function syncAll() {
-    try {
-      await post('/vpn/sync');
-      showToast('🔄 Провайдеры синхронизированы');
       load();
     } catch (e) {
       showToast('Ошибка: ' + e.message, 'error');
@@ -174,7 +163,6 @@
   <div class="page-header">
     <h1>🔌 Провайдеры</h1>
     <div class="header-actions">
-      <button class="btn btn-ghost" onclick={syncAll}>🔄 Синхронизировать</button>
       <button class="btn btn-ghost" onclick={openImport}>📂 Загрузить .conf</button>
       <button class="btn btn-primary" onclick={openCreate}>+ Добавить</button>
     </div>

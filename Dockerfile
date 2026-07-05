@@ -29,15 +29,11 @@ RUN case "$TARGETARCH" in \
     rm -rf /tmp/sing-box-* /tmp/sing-box.tar.gz && \
     chmod +x /usr/local/bin/sing-box
 
-# Create vpn user and config directories
-RUN addgroup -S vpn && adduser -S vpn -G vpn && \
-    mkdir -p /etc/sing-box && \
-    chown vpn:vpn /etc/sing-box
+# Create config directory
+RUN mkdir -p /etc/sing-box
 
 COPY --from=builder /bin/vpn-manager /usr/local/bin/vpn-manager
 COPY migrations/ /migrations/
-
-USER vpn
 
 EXPOSE 8080
 
