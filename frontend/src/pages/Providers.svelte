@@ -7,7 +7,7 @@
   let providers = [];
   let loading = true;
 
-  onMount(load);
+  onMount(() => { load(); });
 
   // Modal state
   let showModal = false;

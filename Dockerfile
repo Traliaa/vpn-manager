@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/vpn-man
 FROM alpine:3.21
 
 # Install runtime deps + sing-box
-RUN apk add --no-cache ca-certificates tzdata iproute2 iptables nftables wget
+RUN apk add --no-cache ca-certificates tzdata iproute2 iptables nftables wget procps-ng
 
 # Download sing-box binary
 ARG TARGETARCH

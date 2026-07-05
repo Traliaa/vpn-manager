@@ -240,52 +240,53 @@ func (c *Controller) applyConfigLocked(ctx context.Context) error {
 }
 
 // Reload signals sing-box to reload its configuration.
-// Tries SIGHUP first (faster), falls back to systemctl restart.
+// In Docker, sends SIGHUP to reload, or starts sing-box if not running.
 func (c *Controller) Reload(ctx context.Context) error {
-	// Try SIGHUP (if sing-box is configured to reload on HUP)
-	cmd := exec.CommandContext(ctx, "pkill", "-SIGHUP", "sing-box")
-	if err := cmd.Run(); err != nil {
-		c.logger.Debug("SIGHUP failed, trying systemctl reload", zap.Error(err))
-
-		// Fall back to systemctl reload (restart)
-		reload := exec.CommandContext(ctx, "systemctl", "reload-or-restart", c.serviceName)
-		if out, err := reload.CombinedOutput(); err != nil {
-			return fmt.Errorf("systemctl reload %s: %w\noutput: %s", c.serviceName, err, string(out))
-		}
+	// Try SIGHUP (graceful reload)
+	if err := exec.CommandContext(ctx, "pkill", "-SIGHUP", "sing-box").Run(); err == nil {
+		c.logger.Info("sing-box reloaded via SIGHUP")
+		return nil
 	}
 
-	c.logger.Info("sing-box reloaded")
+	// Not running — start it in background
+	startCmd := exec.Command(c.binaryPath, "run", "-c", c.configPath)
+	startCmd.Stdout = nil
+	startCmd.Stderr = nil
+	if err := startCmd.Start(); err != nil {
+		return fmt.Errorf("start sing-box: %w", err)
+	}
+
+	c.logger.Info("sing-box started in background")
 	return nil
 }
 
-// Stop stops the sing-box service via systemd.
+// Stop stops the sing-box process.
 func (c *Controller) Stop(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "systemctl", "stop", c.serviceName)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("stop sing-box: %w\noutput: %s", err, string(out))
+	if err := exec.CommandContext(ctx, "pkill", "sing-box").Run(); err != nil {
+		return fmt.Errorf("stop sing-box: %w", err)
 	}
 	c.logger.Info("sing-box stopped")
 	return nil
 }
 
-// Start starts the sing-box service via systemd.
+// Start starts the sing-box process in background.
 func (c *Controller) Start(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "systemctl", "start", c.serviceName)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("start sing-box: %w\noutput: %s", err, string(out))
+	startCmd := exec.Command(c.binaryPath, "run", "-c", c.configPath)
+	startCmd.Stdout = nil
+	startCmd.Stderr = nil
+	if err := startCmd.Start(); err != nil {
+		return fmt.Errorf("start sing-box: %w", err)
 	}
-	c.logger.Info("sing-box started")
+	c.logger.Info("sing-box started in background")
 	return nil
 }
 
-// IsRunning checks if the sing-box service is active.
+// IsRunning checks if sing-box process is running.
 func (c *Controller) IsRunning(ctx context.Context) (bool, error) {
-	cmd := exec.CommandContext(ctx, "systemctl", "is-active", c.serviceName)
-	out, err := cmd.Output()
-	if err != nil {
-		return false, nil // not running
+	if err := exec.CommandContext(ctx, "pgrep", "sing-box").Run(); err != nil {
+		return false, nil
 	}
-	return strings.TrimSpace(string(out)) == "active", nil
+	return true, nil
 }
 
 // Status returns the current runtime info from sing-box API if enabled.

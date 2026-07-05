@@ -8,7 +8,7 @@
   let activeProfileId = null;
   let loading = true;
 
-  onMount(load);
+  onMount(() => { load(); });
 
   // Modal state
   let showModal = false;
