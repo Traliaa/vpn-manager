@@ -160,7 +160,8 @@
                   <td class="text-bold">{i.name}</td>
                   <td><span class="badge badge-type">{i.type}</span></td>
                   <td>
-                    <span class="badge" class:badge-up={i.state === 'up'} class:badge-down={i.state === 'down' || i.state === 'error'}>
+                    <span class="badge" class:badge-up={i.state === 'up'} class:badge-down={i.state === 'down' || i.state === 'error'}
+                      title={i.error || (i.state === 'error' ? 'Неизвестная ошибка' : '')}>
                       {i.state === 'up' ? '🟢 В работе' : i.state === 'down' ? '🔴 Остановлен' : '⚠️ Ошибка'}
                     </span>
                   </td>

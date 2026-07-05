@@ -145,6 +145,7 @@ func (m *Manager) AllStatuses(ctx context.Context) []*InterfaceStatus {
 				Name:  p.Name(),
 				Type:  p.Type(),
 				State: StateError,
+				Error: err.Error(),
 			}
 		}
 		result = append(result, status)

@@ -33,6 +33,7 @@ type InterfaceStatus struct {
 	Name          string         `json:"name"`
 	Type          ProviderType   `json:"type"`
 	State         InterfaceState `json:"state"`
+	Error         string         `json:"error,omitempty"`
 	PublicKey     string         `json:"public_key,omitempty"`
 	LocalAddress  string         `json:"local_address,omitempty"`
 	Endpoint      string         `json:"endpoint,omitempty"`
