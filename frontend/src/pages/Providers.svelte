@@ -132,8 +132,8 @@
     }
   }
 
-    async function deleteProvider(id, name) {
-что    try {
+        async function deleteProvider(id, name) {
+    try {
       const resp = await fetch("/api/v1/providers/" + id, { method: "DELETE" });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
