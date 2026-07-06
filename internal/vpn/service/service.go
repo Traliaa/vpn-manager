@@ -74,7 +74,19 @@ func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
 	}
 
 	s.manager.Register(controller)
-	s.logger.Info("provider registered from DB",
+
+	// Применяем конфиг — создаём интерфейс в ядре
+	var cfg interface{}
+	_ = json.Unmarshal(p.Config, &cfg)
+	if err := controller.ApplyConfig(ctx, cfg); err != nil {
+		// Продолжаем даже с ошибкой — статус покажет проблему
+		s.logger.Warn("apply config after sync",
+			zap.String("provider", p.Name),
+			zap.Error(err),
+		)
+	}
+
+	s.logger.Info("provider synced from DB",
 		zap.String("name", p.Name),
 		zap.String("type", string(p.ProviderType)),
 	)
