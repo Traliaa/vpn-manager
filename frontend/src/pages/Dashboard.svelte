@@ -186,9 +186,6 @@
         </div>
       {/if}
     </div>
-  {/if}
-</div>
-
 
     <!-- Logs -->
     <div class="section">
@@ -207,6 +204,7 @@
       {/if}
     </div>
   {/if}
+</div>
 
 <script context="module">
   function fmtBytes(b) {

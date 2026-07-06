@@ -76,12 +76,34 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 		if err := json.Unmarshal(data, &c.cfg); err != nil {
 			return fmt.Errorf("unmarshal wg config: %w", err)
 		}
+		// If peer fields are empty, try flat format
+		if c.cfg.Peer.Endpoint == "" && c.cfg.Peer.PublicKey == "" {
+			var flat struct {
+				PublicKey  string   `json:"public_key"`
+				Endpoint   string   `json:"endpoint"`
+				AllowedIPs []string `json:"allowed_ips"`
+			}
+			if err := json.Unmarshal(data, &flat); err == nil && flat.PublicKey != "" {
+				c.cfg.Peer.PublicKey = flat.PublicKey
+				c.logger.Debug("migrated flat config to nested peer format")
+				if flat.Endpoint != "" {
+					c.cfg.Peer.Endpoint = flat.Endpoint
+				}
+				if len(flat.AllowedIPs) > 0 {
+					c.cfg.Peer.AllowedIPs = flat.AllowedIPs
+				}
+			}
+		}
 	}
 
 	c.logger.Info("applying WireGuard configuration",
 		zap.String("endpoint", c.cfg.Peer.Endpoint),
 		zap.Strings("allowed_ips", c.cfg.Peer.AllowedIPs),
 	)
+
+	if c.cfg.PrivateKey == "" || c.cfg.Peer.PublicKey == "" {
+		return fmt.Errorf("incomplete config: missing private_key or peer.public_key")
+	}
 
 	privKey, err := wgtypes.ParseKey(c.cfg.PrivateKey)
 	if err != nil {
