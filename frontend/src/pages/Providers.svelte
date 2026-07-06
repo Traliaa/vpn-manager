@@ -132,14 +132,20 @@
     }
   }
 
-  async function deleteProvider(id, name) {
-    if (!confirm(`Удалить провайдера "${name}"?`)) return;
+    async function deleteProvider(id, name) {
+    console.log("delete clicked", id, name);
+    if (!confirm("Delete provider?")) return;
     try {
-      await del('/providers/' + id);
-      showToast('🗑 Провайдер удалён');
+      const resp = await fetch("/api/v1/providers/" + id, { method: "DELETE" });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || resp.statusText);
+      }
+      showToast("Deleted");
       load();
     } catch (e) {
-      showToast('Ошибка: ' + e.message, 'error');
+      console.error("delete error", e);
+      showToast("Error: " + e.message, "error");
     }
   }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -200,6 +201,13 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 		Peers:        []wgtypes.PeerConfig{peerCfg},
 	}
 
+	// Create interface if not exists
+	if err := exec.Command("ip", "link", "add", "dev", c.ifaceName, "type", "wireguard").Run(); err != nil {
+		c.logger.Debug("ip link add (may already exist)",
+			zap.String("iface", c.ifaceName),
+			zap.Error(err),
+		)
+	}
 	if err := c.client.ConfigureDevice(ctx, c.ifaceName, deviceCfg); err != nil {
 		return fmt.Errorf("configure device %s: %w", c.ifaceName, err)
 	}
