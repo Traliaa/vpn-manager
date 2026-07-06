@@ -160,10 +160,12 @@
                   <td class="text-bold">{i.name}</td>
                   <td><span class="badge badge-type">{i.type}</span></td>
                   <td>
-                    <span class="badge" class:badge-up={i.state === 'up'} class:badge-down={i.state === 'down' || i.state === 'error'}
-                      title={i.error || (i.state === 'error' ? 'Неизвестная ошибка' : '')}>
+                    <span class="badge" class:badge-up={i.state === 'up'} class:badge-down={i.state === 'down' || i.state === 'error'}>
                       {i.state === 'up' ? '🟢 В работе' : i.state === 'down' ? '🔴 Остановлен' : '⚠️ Ошибка'}
                     </span>
+                    {#if i.error}
+                      <div class="error-hint" title={i.error}>{i.error}</div>
+                    {/if}
                   </td>
                   <td class="text-mono">{fmtBytes(i.tx_bytes)}</td>
                   <td class="text-mono">{fmtBytes(i.rx_bytes)}</td>
@@ -278,6 +280,7 @@
   .badge-up { background: rgba(74, 222, 128, 0.12); color: #4ade80; }
   .badge-down { background: rgba(248, 113, 113, 0.12); color: #f87171; }
   .badge-type { background: rgba(124, 92, 252, 0.1); color: #9b7fff; }
+  .error-hint { font-size: 11px; color: #f87171; margin-top: 2px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 
   .empty-state {
     text-align: center;

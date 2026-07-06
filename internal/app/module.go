@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os/exec"
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/api"
@@ -95,6 +96,9 @@ func startResolver(lc fx.Lifecycle, svc *resolver.Service, cfg *config.Config, l
 func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queries *db.Queries, svc *service.Service, logger *zap.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
+			// Загружаем VPN-модули ядра (если не загружены)
+			loadKernelModules(logger)
+
 			// Синхронизируем провайдеров из БД в менеджер
 			if err := svc.SyncProviders(ctx); err != nil {
 				logger.Warn("failed to sync providers on startup",
@@ -124,6 +128,23 @@ func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queri
 			return nil
 		},
 	})
+}
+
+// loadKernelModules пытается загрузить VPN-модули ядра (wireguard, amneziawg).
+func loadKernelModules(logger *zap.Logger) {
+	modules := []string{"wireguard", "amneziawg"}
+	for _, mod := range modules {
+		if err := exec.Command("modprobe", mod).Run(); err != nil {
+			logger.Debug("kernel module not available",
+				zap.String("module", mod),
+				zap.Error(err),
+			)
+		} else {
+			logger.Info("kernel module loaded",
+				zap.String("module", mod),
+			)
+		}
+	}
 }
 
 // newBot creates a Telegram bot (no-op if token is empty).
