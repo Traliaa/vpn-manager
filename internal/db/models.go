@@ -260,7 +260,7 @@ type Interface struct {
 	Type       InterfaceType      `json:"type"`
 	State      InterfaceState     `json:"state"`
 	LocalIp    *netip.Addr        `json:"local_ip"`
-	Config     []byte             `json:"config"`
+	Config     string             `json:"config"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
@@ -299,7 +299,7 @@ type VpnProvider struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`
 	ProviderType ProviderType       `json:"provider_type"`
-	Config       []byte             `json:"config"`
+	Config       string             `json:"config"`
 	Enabled      bool               `json:"enabled"`
 	Priority     int32              `json:"priority"`
 	HealthHost   pgtype.Text        `json:"health_host"`

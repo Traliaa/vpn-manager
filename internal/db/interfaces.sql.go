@@ -143,7 +143,7 @@ type UpsertInterfaceParams struct {
 	Type       InterfaceType  `json:"type"`
 	State      InterfaceState `json:"state"`
 	LocalIp    *netip.Addr    `json:"local_ip"`
-	Config     []byte         `json:"config"`
+	Config     string         `json:"config"`
 }
 
 func (q *Queries) UpsertInterface(ctx context.Context, arg UpsertInterfaceParams) (Interface, error) {

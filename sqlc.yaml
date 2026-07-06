@@ -13,3 +13,8 @@ sql:
         emit_interface: true
         emit_empty_slices: true
         json_tags_case_style: "snake"
+        overrides:
+          - db_type: "jsonb"
+            go_type: "string"
+          - db_type: "json"
+            go_type: "string"

@@ -77,7 +77,7 @@ func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
 
 	// Применяем конфиг — создаём интерфейс в ядре
 	var cfg interface{}
-	_ = json.Unmarshal(p.Config, &cfg)
+	_ = json.Unmarshal([]byte(p.Config), &cfg)
 	if err := controller.ApplyConfig(ctx, cfg); err != nil {
 		// Продолжаем даже с ошибкой — статус покажет проблему
 		s.logger.Warn("apply config after sync",
@@ -99,7 +99,7 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 	case db.ProviderTypeAmneziawg:
 		// Пробуем AmneziaWG, если не вышло — fallback на обычный WireGuard
 		var awgCfg amneziawg.Config
-		if err := json.Unmarshal(p.Config, &awgCfg); err == nil {
+		if err := json.Unmarshal([]byte(p.Config), &awgCfg); err == nil {
 			if ctrl, err := amneziawg.NewController(p.Name, awgCfg, s.logger); err == nil {
 				return ctrl, nil
 			}
@@ -110,21 +110,21 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 		}
 		// Fallback: используем WireGuard контроллер
 		var wgCfg wireguard.Config
-		if err := json.Unmarshal(p.Config, &wgCfg); err != nil {
+		if err := json.Unmarshal([]byte(p.Config), &wgCfg); err != nil {
 			return nil, fmt.Errorf("unmarshal fallback wireguard config: %w", err)
 		}
 		return wireguard.NewController(p.Name, wgCfg, s.logger)
 
 	case db.ProviderTypeWireguard:
 		var cfg wireguard.Config
-		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+		if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal wireguard config: %w", err)
 		}
 		return wireguard.NewController(p.Name, cfg, s.logger)
 
 	case db.ProviderTypeVless:
 		var cfg vless.Config
-		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+		if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal vless config: %w", err)
 		}
 		cfg.OutboundTag = p.Name
@@ -134,7 +134,7 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 
 	case db.ProviderTypeHysteria2:
 		var cfg hysteria2.Config
-		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+		if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal hysteria2 config: %w", err)
 		}
 		cfg.OutboundTag = p.Name
@@ -144,7 +144,7 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 
 	case db.ProviderTypeTuic:
 		var cfg tuic.Config
-		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+		if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal tuic config: %w", err)
 		}
 		cfg.OutboundTag = p.Name
@@ -154,7 +154,7 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 
 	case db.ProviderTypeShadowsocks:
 		var cfg shadowsocks.Config
-		if err := json.Unmarshal(p.Config, &cfg); err != nil {
+		if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal shadowsocks config: %w", err)
 		}
 		cfg.OutboundTag = p.Name

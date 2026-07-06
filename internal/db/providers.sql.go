@@ -20,7 +20,7 @@ RETURNING id, name, provider_type, config, enabled, priority, health_host, creat
 type CreateProviderParams struct {
 	Name         string       `json:"name"`
 	ProviderType ProviderType `json:"provider_type"`
-	Config       []byte       `json:"config"`
+	Config       string       `json:"config"`
 	Enabled      bool         `json:"enabled"`
 	Priority     int32        `json:"priority"`
 	HealthHost   pgtype.Text  `json:"health_host"`
@@ -166,7 +166,7 @@ type UpdateProviderParams struct {
 	ID           pgtype.UUID  `json:"id"`
 	Name         string       `json:"name"`
 	ProviderType ProviderType `json:"provider_type"`
-	Config       []byte       `json:"config"`
+	Config       string       `json:"config"`
 	Enabled      bool         `json:"enabled"`
 	Priority     int32        `json:"priority"`
 	HealthHost   pgtype.Text  `json:"health_host"`

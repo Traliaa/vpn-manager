@@ -114,7 +114,7 @@ func (h *Handlers) ImportConfig(w http.ResponseWriter, r *http.Request) {
 	provider, err := h.q.CreateProvider(r.Context(), db.CreateProviderParams{
 		Name:         providerName,
 		ProviderType: db.ProviderType(providerType),
-		Config:       configJSON,
+		Config:       string(configJSON),
 		Enabled:      true,
 		Priority:     100,
 		HealthHost:   pgtype.Text{},

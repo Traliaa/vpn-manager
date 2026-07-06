@@ -79,13 +79,13 @@ func (h *Handlers) CreateProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfgBytes := []byte("{}")
+	cfgStr := "{}"
 	if req.Config != nil {
-		var err error
-		cfgBytes, err = json.Marshal(req.Config)
+		data, err := json.Marshal(req.Config)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid config")
 			return
+			cfgStr = string(data)
 		}
 	}
 
@@ -101,7 +101,7 @@ func (h *Handlers) CreateProvider(w http.ResponseWriter, r *http.Request) {
 	provider, err := h.q.CreateProvider(r.Context(), db.CreateProviderParams{
 		Name:         req.Name,
 		ProviderType: db.ProviderType(req.ProviderType),
-		Config:       cfgBytes,
+		Config:       cfgStr,
 		Enabled:      enabled,
 		Priority:     priority,
 		HealthHost:   pgtype.Text{String: req.HealthHost, Valid: req.HealthHost != ""},
@@ -177,12 +177,13 @@ func (h *Handlers) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 	if req.ProviderType != "" {
 		ptype = db.ProviderType(req.ProviderType)
 	}
-	cfgBytes := current.Config
+	cfgStr := current.Config
 	if req.Config != nil {
-		cfgBytes, err = json.Marshal(req.Config)
+		data, err := json.Marshal(req.Config)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid config")
 			return
+			cfgStr = string(data)
 		}
 	}
 	enabled := current.Enabled
@@ -200,7 +201,7 @@ func (h *Handlers) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 
 	provider, err := h.q.UpdateProvider(r.Context(), db.UpdateProviderParams{
 		ID: id, Name: name, ProviderType: ptype,
-		Config: cfgBytes, Enabled: enabled, Priority: priority,
+		Config: cfgStr, Enabled: enabled, Priority: priority,
 		HealthHost: healthHost,
 	})
 	if err != nil {
