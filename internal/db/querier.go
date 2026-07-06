@@ -25,6 +25,7 @@ type Querier interface {
 	DeleteResolvedRoutesByRule(ctx context.Context, ruleID pgtype.UUID) error
 	DeleteRule(ctx context.Context, id pgtype.UUID) error
 	DeleteStaleResolvedRoutes(ctx context.Context, dollar_1 pgtype.Interval) error
+	FindProviderByPeerKey(ctx context.Context, arg FindProviderByPeerKeyParams) (VpnProvider, error)
 	GetDefaultProfile(ctx context.Context) (Profile, error)
 	GetInterface(ctx context.Context, id pgtype.UUID) (Interface, error)
 	GetInterfaceByName(ctx context.Context, name string) (Interface, error)

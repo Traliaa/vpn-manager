@@ -133,9 +133,7 @@
   }
 
     async function deleteProvider(id, name) {
-    console.log("delete clicked", id, name);
-    if (!confirm("Delete provider?")) return;
-    try {
+что    try {
       const resp = await fetch("/api/v1/providers/" + id, { method: "DELETE" });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));

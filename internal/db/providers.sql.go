@@ -59,6 +59,35 @@ func (q *Queries) DeleteProvider(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const findProviderByPeerKey = `-- name: FindProviderByPeerKey :one
+SELECT id, name, provider_type, config, enabled, priority, health_host, created_at, updated_at FROM vpn_providers
+WHERE provider_type = $1
+  AND config->'peer'->>'public_key' = $2
+LIMIT 1
+`
+
+type FindProviderByPeerKeyParams struct {
+	ProviderType ProviderType `json:"provider_type"`
+	Config       string       `json:"config"`
+}
+
+func (q *Queries) FindProviderByPeerKey(ctx context.Context, arg FindProviderByPeerKeyParams) (VpnProvider, error) {
+	row := q.db.QueryRow(ctx, findProviderByPeerKey, arg.ProviderType, arg.Config)
+	var i VpnProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.ProviderType,
+		&i.Config,
+		&i.Enabled,
+		&i.Priority,
+		&i.HealthHost,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getProvider = `-- name: GetProvider :one
 SELECT id, name, provider_type, config, enabled, priority, health_host, created_at, updated_at FROM vpn_providers WHERE id = $1
 `

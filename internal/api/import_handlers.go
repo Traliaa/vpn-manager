@@ -110,6 +110,52 @@ func (h *Handlers) ImportConfig(w http.ResponseWriter, r *http.Request) {
 		providerName = "imported-vpn"
 	}
 
+	// Extract public_key for dedup
+	var publicKey string
+	if len(parsed.Peers) > 0 {
+		publicKey = parsed.Peers[0].PublicKey
+	}
+
+	// Check for existing provider with the same type + public_key
+	if publicKey != "" {
+		existing, err := h.q.FindProviderByPeerKey(r.Context(), db.FindProviderByPeerKeyParams{
+			ProviderType: db.ProviderType(providerType),
+			Config:       publicKey,
+		})
+		if err == nil {
+			// Found duplicate — update existing provider
+			_, err = h.q.UpdateProvider(r.Context(), db.UpdateProviderParams{
+				ID:           existing.ID,
+				Name:         providerName,
+				ProviderType: db.ProviderType(providerType),
+				Config:       string(configJSON),
+				Enabled:      false,
+				Priority:     existing.Priority,
+				HealthHost:   existing.HealthHost,
+			})
+			if err != nil {
+				h.logger.Error("import: update existing provider",
+					zap.Error(err),
+				)
+				writeError(w, http.StatusInternalServerError, "failed to update provider: "+err.Error())
+				return
+			}
+
+			h.audit(r.Context(), "import-update", "vpn_providers", existing.ID, map[string]any{
+				"name":  providerName,
+				"type":  providerType,
+				"dedup": true,
+			})
+
+			writeJSON(w, http.StatusOK, map[string]any{
+				"provider": existing,
+				"detected": providerType,
+				"dedup":    true,
+			})
+			return
+		}
+	}
+
 	// Create provider using existing queries
 	provider, err := h.q.CreateProvider(r.Context(), db.CreateProviderParams{
 		Name:         providerName,
