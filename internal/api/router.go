@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/Traliaa/vpn-manager/internal/api/logs"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -8,7 +9,7 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *HaHandlers) *chi.Mux {
+func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *HaHandlers, logH *logs.HTTPHandler) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -71,6 +72,8 @@ func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *H
 		})
 
 		r.Post("/profiles/{id}/activate", routingH.ActivateProfile)
+
+		r.Get("/logs", logH.ServeHTTP)
 
 		r.Route("/ha", func(r chi.Router) {
 			r.Get("/status", haH.Status)

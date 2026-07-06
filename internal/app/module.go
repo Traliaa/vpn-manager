@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/api"
+	"github.com/Traliaa/vpn-manager/internal/api/logs"
 	"github.com/Traliaa/vpn-manager/internal/bot"
 	"github.com/Traliaa/vpn-manager/internal/config"
 	"github.com/Traliaa/vpn-manager/internal/db"
@@ -16,6 +17,8 @@ import (
 	"github.com/Traliaa/vpn-manager/internal/vpn/service"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"os"
 )
 
 var Module = fx.Module("app",
@@ -31,6 +34,7 @@ var Module = fx.Module("app",
 		resolver.NewService,
 		routing.NewActivator,
 		newBot,
+		func() *logs.Buffer { return logs.NewBuffer(500) },
 	),
 
 	fx.Invoke(
@@ -40,8 +44,16 @@ var Module = fx.Module("app",
 		startBot,
 	),
 
-	fx.Provide(func() (*zap.Logger, error) {
-		return zap.NewProduction()
+	fx.Provide(func(buf *logs.Buffer) (*zap.Logger, error) {
+		logger := zap.New(zapcore.NewTee(
+			zapcore.NewCore(
+				zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+				zapcore.AddSync(os.Stdout),
+				zap.NewAtomicLevelAt(zap.InfoLevel),
+			),
+			buf.ZapCore(),
+		))
+		return logger, nil
 	}),
 	fx.Decorate(func(log *zap.Logger) *zap.Logger {
 		return log.With(zap.String("service", "vpn-manager"))

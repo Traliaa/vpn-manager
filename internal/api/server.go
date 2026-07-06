@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Traliaa/vpn-manager/internal/api/logs"
 	"github.com/Traliaa/vpn-manager/internal/config"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/fx"
@@ -49,6 +50,6 @@ func RunServer(p ServerParams) {
 }
 
 var Module = fx.Module("api",
-	fx.Provide(NewHandlers, NewVpnHandlers, NewRoutingHandlers, NewHaHandlers, NewRouter),
+	fx.Provide(NewHandlers, NewVpnHandlers, NewRoutingHandlers, NewHaHandlers, NewRouter, logs.NewHTTPHandler),
 	fx.Invoke(RunServer),
 )

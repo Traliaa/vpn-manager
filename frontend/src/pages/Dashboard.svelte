@@ -11,6 +11,8 @@
   let routingProfile = null;
   let health = {};
   let loading = true;
+  let logs = [];
+  let logExpanded = false;
 
   let txHistory = [];
   let rxHistory = [];
@@ -37,7 +39,10 @@
       const totalTx = interfaces.reduce((s, i) => s + (i.tx_bytes || 0), 0);
       const totalRx = interfaces.reduce((s, i) => s + (i.rx_bytes || 0), 0);
       txHistory = [...txHistory.slice(-(MAX_POINTS - 1)), totalTx / 1024 / 1024];
-      rxHistory = [...rxHistory.slice(-(MAX_POINTS - 1)), totalRx / 1024 / 1024];
+      rxHistory = [...rxHistory.slice(-(MAX_POINTS - 1)), totalRx / 1024 / 1024]
+
+      // Load logs
+      try { const l = await get("/logs"); logs = l.logs || []; } catch (_) {};
     } catch (e) {
       loading = false;
     }
@@ -184,6 +189,25 @@
   {/if}
 </div>
 
+
+    <!-- Logs -->
+    <div class="section">
+      <h2 class="log-toggle" onclick={() => logExpanded = !logExpanded}>
+        📋 Логи {logExpanded ? "▲" : "▼"}
+      </h2>
+      {#if logExpanded}
+        <div class="log-viewer">
+          {#each logs.slice(0, 50) as log}
+            <div class="log-line" class:log-error={log.level === "error" || log.level === "warn"}>
+              <span class="log-level">{log.level}</span>
+              <span class="log-msg">{log.message}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
 <script context="module">
   function fmtBytes(b) {
     if (!b || b === 0) return '—';
@@ -308,4 +332,25 @@
     animation: spin 0.6s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* Log viewer */
+  .log-toggle { font-size: 16px; margin-bottom: 12px; }
+  .log-viewer {
+    background: #0a0a18;
+    border: 1px solid #2a2a4a;
+    border-radius: 10px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .log-line { padding: 2px 0; display: flex; gap: 8px; }
+  .log-error { background: rgba(248,113,113,0.06); }
+  .log-level {
+    flex-shrink: 0; width: 50px;
+    color: #666; text-transform: uppercase; font-size: 10px;
+  }
+  .log-msg { color: #ccc; overflow: hidden; text-overflow: ellipsis; }
 </style>
+
