@@ -85,11 +85,23 @@ func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
 func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 	switch p.ProviderType {
 	case db.ProviderTypeAmneziawg:
-		var cfg amneziawg.Config
-		if err := json.Unmarshal(p.Config, &cfg); err != nil {
-			return nil, fmt.Errorf("unmarshal amneziawg config: %w", err)
+		// Пробуем AmneziaWG, если не вышло — fallback на обычный WireGuard
+		var awgCfg amneziawg.Config
+		if err := json.Unmarshal(p.Config, &awgCfg); err == nil {
+			if ctrl, err := amneziawg.NewController(p.Name, awgCfg, s.logger); err == nil {
+				return ctrl, nil
+			}
+			s.logger.Warn("amneziawg controller failed, falling back to wireguard",
+				zap.String("provider", p.Name),
+				zap.Error(err),
+			)
 		}
-		return amneziawg.NewController(p.Name, cfg, s.logger)
+		// Fallback: используем WireGuard контроллер
+		var wgCfg wireguard.Config
+		if err := json.Unmarshal(p.Config, &wgCfg); err != nil {
+			return nil, fmt.Errorf("unmarshal fallback wireguard config: %w", err)
+		}
+		return wireguard.NewController(p.Name, wgCfg, s.logger)
 
 	case db.ProviderTypeWireguard:
 		var cfg wireguard.Config

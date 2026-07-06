@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/vpn"
+	"github.com/advanced-wg/awgctrl-go"
+	"github.com/advanced-wg/awgctrl-go/wgtypes"
 	"go.uber.org/zap"
-	"golang.zx2c4.com/wireguard/wgctrl"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 // Config представляет конфигурацию AmneziaWG.
@@ -160,7 +160,7 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 		Peers:        []wgtypes.PeerConfig{peerCfg},
 	}
 
-	if err := c.client.ConfigureDevice(c.name, deviceCfg); err != nil {
+	if err := c.client.ConfigureDevice(ctx, c.name, deviceCfg); err != nil {
 		return fmt.Errorf("configure device %s: %w", c.name, err)
 	}
 
@@ -178,7 +178,7 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 func (c *Controller) Remove(ctx context.Context) error {
 	c.logger.Info("removing AmneziaWG interface")
 	if c.client != nil {
-		_ = c.client.ConfigureDevice(c.name, wgtypes.Config{
+		_ = c.client.ConfigureDevice(ctx, c.name, wgtypes.Config{
 			ReplacePeers: true,
 			Peers:        []wgtypes.PeerConfig{},
 		})
@@ -192,7 +192,7 @@ func (c *Controller) Status(ctx context.Context) (*vpn.InterfaceStatus, error) {
 		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown}, nil
 	}
 
-	dev, err := c.client.Device(c.name)
+	dev, err := c.client.Device(ctx, c.name)
 	if err != nil {
 		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateError},
 			fmt.Errorf("get device status: %w", err)
