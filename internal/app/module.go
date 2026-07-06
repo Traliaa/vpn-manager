@@ -92,9 +92,16 @@ func startResolver(lc fx.Lifecycle, svc *resolver.Service, cfg *config.Config, l
 	})
 }
 
-func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queries *db.Queries, logger *zap.Logger) {
+func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queries *db.Queries, svc *service.Service, logger *zap.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
+			// Синхронизируем провайдеров из БД в менеджер
+			if err := svc.SyncProviders(ctx); err != nil {
+				logger.Warn("failed to sync providers on startup",
+					zap.Error(err),
+				)
+			}
+
 			// Пробуем активировать профиль по умолчанию (если есть)
 			profile, err := queries.GetDefaultProfile(ctx)
 			if err != nil {
