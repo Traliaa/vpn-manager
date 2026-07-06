@@ -115,7 +115,7 @@ func (h *Handlers) ImportConfig(w http.ResponseWriter, r *http.Request) {
 		Name:         providerName,
 		ProviderType: db.ProviderType(providerType),
 		Config:       string(configJSON),
-		Enabled:      true,
+		Enabled:      false,
 		Priority:     100,
 		HealthHost:   pgtype.Text{},
 	})

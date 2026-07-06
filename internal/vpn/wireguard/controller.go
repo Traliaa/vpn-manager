@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/vpn"
@@ -35,10 +36,11 @@ type PeerConfig struct {
 
 // Controller управляет WireGuard-интерфейсом.
 type Controller struct {
-	name   string
-	cfg    Config
-	logger *zap.Logger
-	client *wgctrl.Client
+	name      string
+	ifaceName string
+	cfg       Config
+	logger    *zap.Logger
+	client    *wgctrl.Client
 }
 
 // NewController создаёт WireGuard-контроллер.
@@ -49,15 +51,37 @@ func NewController(name string, cfg Config, logger *zap.Logger) (*Controller, er
 	}
 
 	return &Controller{
-		name:   name,
-		cfg:    cfg,
-		logger: logger.With(zap.String("interface", name), zap.String("type", "wireguard")),
-		client: client,
+		name:      name,
+		ifaceName: sanitizeIfaceName(name, "wg"),
+		cfg:       cfg,
+		logger:    logger.With(zap.String("interface", name), zap.String("type", "wireguard")),
+		client:    client,
 	}, nil
 }
 
 func (c *Controller) Type() vpn.ProviderType { return vpn.ProviderWireGuard }
 func (c *Controller) Name() string           { return c.name }
+
+// sanitizeIfaceName создаёт корректное Linux-имя интерфейса из произвольной строки.
+func sanitizeIfaceName(name, prefix string) string {
+	var result strings.Builder
+	for _, r := range name {
+		if result.Len() >= 12 {
+			break
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			result.WriteRune(r)
+		}
+	}
+	s := result.String()
+	if s == "" {
+		return prefix + "0"
+	}
+	if s[0] >= '0' && s[0] <= '9' {
+		s = prefix + "_" + s
+	}
+	return s
+}
 
 // ApplyConfig создаёт или обновляет WireGuard-интерфейс.
 func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
@@ -97,6 +121,7 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 	}
 
 	c.logger.Info("applying WireGuard configuration",
+		zap.String("iface", c.ifaceName),
 		zap.String("endpoint", c.cfg.Peer.Endpoint),
 		zap.Strings("allowed_ips", c.cfg.Peer.AllowedIPs),
 	)
@@ -175,8 +200,8 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 		Peers:        []wgtypes.PeerConfig{peerCfg},
 	}
 
-	if err := c.client.ConfigureDevice(ctx, c.name, deviceCfg); err != nil {
-		return fmt.Errorf("configure device %s: %w", c.name, err)
+	if err := c.client.ConfigureDevice(ctx, c.ifaceName, deviceCfg); err != nil {
+		return fmt.Errorf("configure device %s: %w", c.ifaceName, err)
 	}
 
 	c.logger.Info("WireGuard configuration applied")
@@ -187,7 +212,7 @@ func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
 func (c *Controller) Remove(ctx context.Context) error {
 	c.logger.Info("removing WireGuard interface")
 	if c.client != nil {
-		_ = c.client.ConfigureDevice(ctx, c.name, wgtypes.Config{
+		_ = c.client.ConfigureDevice(ctx, c.ifaceName, wgtypes.Config{
 			ReplacePeers: true,
 			Peers:        []wgtypes.PeerConfig{},
 		})
@@ -201,7 +226,7 @@ func (c *Controller) Status(ctx context.Context) (*vpn.InterfaceStatus, error) {
 		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown}, nil
 	}
 
-	dev, err := c.client.Device(ctx, c.name)
+	dev, err := c.client.Device(ctx, c.ifaceName)
 	if err != nil {
 		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateError},
 			fmt.Errorf("get device status: %w", err)
