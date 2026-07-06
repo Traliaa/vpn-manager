@@ -62,7 +62,6 @@ func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *H
 
 		r.Route("/vpn", func(r chi.Router) {
 			r.Get("/interfaces", vpnH.ListInterfaces)
-			r.Post("/sync", vpnH.SyncProviders)
 		})
 
 		r.Route("/routing", func(r chi.Router) {

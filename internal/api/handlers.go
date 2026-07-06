@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/db"
+	"github.com/Traliaa/vpn-manager/internal/vpn/service"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,10 +19,11 @@ type Handlers struct {
 	q      *db.Queries
 	pool   *pgxpool.Pool
 	logger *zap.Logger
+	svc    *service.Service
 }
 
-func NewHandlers(q *db.Queries, pool *pgxpool.Pool, logger *zap.Logger) *Handlers {
-	return &Handlers{q: q, pool: pool, logger: logger}
+func NewHandlers(q *db.Queries, pool *pgxpool.Pool, logger *zap.Logger, svc *service.Service) *Handlers {
+	return &Handlers{q: q, pool: pool, logger: logger, svc: svc}
 }
 
 // ---- helpers ----
@@ -211,6 +213,11 @@ func (h *Handlers) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.audit(r.Context(), "update", "vpn_providers", id, nil)
+	if enabled && !current.Enabled {
+		if err := h.svc.SyncProviders(r.Context()); err != nil {
+			h.logger.Warn("sync after enable", zap.Error(err))
+		}
+	}
 	writeJSON(w, http.StatusOK, provider)
 }
 
