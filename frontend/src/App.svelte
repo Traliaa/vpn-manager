@@ -25,7 +25,7 @@
       <button class="nav-item" class:active={$currentPage === 'routing'} onclick={() => navigate('routing')}>
         <span class="nav-icon">🌐</span> Маршрутизация
       </button>
-      <a href="/uptime/" target="_blank" class="nav-item" rel="noreferrer">
+      <a href="http://vpn-manager.etk3.xyz:3001" target="_blank" class="nav-item" rel="noreferrer">
         <span class="nav-icon">📊</span> Мониторинг ↗
       </a>
     </nav>

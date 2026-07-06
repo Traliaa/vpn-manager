@@ -63,8 +63,8 @@ services:
     image: louislam/uptime-kuma:latest
     container_name: vpn-manager-uptime
     restart: unless-stopped
-    expose:
-      - "3001"
+    ports:
+      - "3001:3001"
     volumes:
       - uptime-kuma-data:/app/data
 
