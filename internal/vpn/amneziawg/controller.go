@@ -155,13 +155,17 @@ func (c *Controller) Connect(ctx context.Context) error {
 		}
 	}
 
-	// 1. Создаём WireGuard-интерфейс
-	wgLink := &netlink.Wireguard{LinkAttrs: netlink.NewLinkAttrs()}
-	wgLink.Name = c.ifaceName
-	if err := netlink.LinkAdd(wgLink); err != nil {
-		return fmt.Errorf("create interface %s: %w", c.ifaceName, err)
+	// 1. Создаём AmneziaWG-интерфейс
+	link := &netlink.GenericLink{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: c.ifaceName,
+		},
+		LinkType: "amneziawg",
 	}
-	c.logger.Debug("interface created", zap.String("iface", c.ifaceName))
+	if err := netlink.LinkAdd(link); err != nil {
+		return fmt.Errorf("create amneziawg interface %s: %w", c.ifaceName, err)
+	}
+	c.logger.Debug("amneziawg interface created", zap.String("iface", c.ifaceName))
 
 	// 2. Применяем конфигурацию WG (ключи, пиры)
 	pubKey, err := wgtypes.ParseKey(c.cfg.Peer.PublicKey)
@@ -271,11 +275,11 @@ func (c *Controller) Connect(ctx context.Context) error {
 	}
 
 	// 5. Поднимаем интерфейс
-	link, err := netlink.LinkByName(c.ifaceName)
+	iface, err := netlink.LinkByName(c.ifaceName)
 	if err != nil {
 		return fmt.Errorf("find interface %s: %w", c.ifaceName, err)
 	}
-	if err := netlink.LinkSetUp(link); err != nil {
+	if err := netlink.LinkSetUp(iface); err != nil {
 		return fmt.Errorf("bring up interface %s: %w", c.ifaceName, err)
 	}
 	c.logger.Debug("interface is up", zap.String("iface", c.ifaceName))
@@ -297,7 +301,7 @@ func (c *Controller) Connect(ctx context.Context) error {
 		}
 		route := &netlink.Route{
 			Dst:       dst,
-			LinkIndex: link.Attrs().Index,
+			LinkIndex: iface.Attrs().Index,
 		}
 		if err := netlink.RouteAdd(route); err != nil {
 			// Может уже существовать — не фатально
