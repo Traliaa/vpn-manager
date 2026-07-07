@@ -14,6 +14,10 @@
   let logs = [];
   let logExpanded = false;
 
+  // Gateway state
+  let gatewayStatus = { enabled: false, interface: '' };
+  let gwProviderName = '';
+
   let txHistory = [];
   let rxHistory = [];
   let autoRefresh = null;
@@ -22,17 +26,19 @@
 
   async function load() {
     try {
-      const [provData, vpnData, routeData, healthData] = await Promise.all([
+      const [provData, vpnData, routeData, healthData, gwData] = await Promise.all([
         get('/providers'),
         get('/vpn/interfaces'),
         get('/routing/status'),
         get('/health'),
+        get('/gateway/status').catch(() => ({ enabled: false, interface: '' })),
       ]);
       providers = provData.providers || [];
       interfaces = vpnData.interfaces || [];
       routingActive = routeData.active;
       routingProfile = routeData.profile || null;
       health = healthData;
+      gatewayStatus = gwData;
       loading = false;
 
       // Traffic tracking
@@ -101,6 +107,34 @@
     }
   }
 
+  // Gateway control
+  async function enableGateway() {
+    if (!gwProviderName) {
+      showToast('Выберите провайдера', 'error');
+      return;
+    }
+    try {
+      await post('/gateway/enable', { provider_name: gwProviderName });
+      showToast('✅ Gateway включён');
+      load();
+    } catch (e) {
+      showToast('Ошибка: ' + e.message, 'error');
+    }
+  }
+
+  async function disableGateway() {
+    try {
+      await post('/gateway/disable');
+      showToast('⏹ Gateway выключен');
+      load();
+    } catch (e) {
+      showToast('Ошибка: ' + e.message, 'error');
+    }
+  }
+
+  // Providers with interfaces for gateway
+  $: gwCapableProviders = providers.filter(p => ['amneziawg', 'wireguard'].includes(p.provider_type));
+
   $: upCount = interfaces.filter(i => i.state === 'up').length;
   $: downCount = interfaces.filter(i => i.state === 'down' || i.state === 'error').length;
   $: enabledProviders = providers.filter(p => p.enabled);
@@ -147,6 +181,38 @@
         {#if routingActive}
           <button class="btn btn-ghost" onclick={toggleRouting}>⏹ Выключить</button>
         {/if}
+      </div>
+    </div>
+
+    <!-- Gateway Control -->
+    <div class="section">
+      <h2>🚪 Gateway (NAT/Masquerade)</h2>
+      <div class="gateway-box">
+        <div class="gateway-status">
+          <span class="badge" class:badge-up={gatewayStatus.enabled} class:badge-down={!gatewayStatus.enabled}>
+            {gatewayStatus.enabled ? '🟢 Активен' : '🔴 Выключен'}
+          </span>
+          {#if gatewayStatus.interface}
+            <span class="gateway-iface">Интерфейс: <strong>{gatewayStatus.interface}</strong></span>
+          {/if}
+        </div>
+        <div class="gateway-actions">
+          {#if !gatewayStatus.enabled}
+            <select class="input select" bind:value={gwProviderName}>
+              <option value="">Выберите провайдера</option>
+              {#each gwCapableProviders as p}
+                <option value={p.name}>{p.name}</option>
+              {/each}
+            </select>
+            <button class="btn btn-primary" onclick={enableGateway} disabled={!gwProviderName}>
+              🚀 Включить
+            </button>
+          {:else}
+            <button class="btn btn-ghost" onclick={disableGateway}>
+              ⏹ Выключить
+            </button>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -241,6 +307,39 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+
+  .gateway-box {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    background: #16162b;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .gateway-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .gateway-iface {
+    font-size: 13px;
+    color: #888;
+  }
+  .gateway-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .gateway-actions .select {
+    min-width: 180px;
+  }
+  .gateway-actions .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .input {
