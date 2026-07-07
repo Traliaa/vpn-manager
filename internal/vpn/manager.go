@@ -119,7 +119,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	var lastErr error
 	for name, p := range m.providers {
 		m.logger.Info("stopping provider", zap.String("name", name))
-		if err := p.Remove(ctx); err != nil {
+		if err := p.Disconnect(ctx); err != nil {
 			m.logger.Error("failed to stop provider",
 				zap.String("name", name),
 				zap.Error(err),

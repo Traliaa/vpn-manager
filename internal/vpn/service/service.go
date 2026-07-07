@@ -73,17 +73,27 @@ func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
 		return fmt.Errorf("build controller for %q: %w", p.Name, err)
 	}
 
-	s.manager.Register(controller)
-
-	// Применяем конфиг — создаём интерфейс в ядре
+	// 1. Применяем конфиг (только валидация)
 	var cfg interface{}
 	_ = json.Unmarshal([]byte(p.Config), &cfg)
 	if err := controller.ApplyConfig(ctx, cfg); err != nil {
-		// Продолжаем даже с ошибкой — статус покажет проблему
-		s.logger.Warn("apply config after sync",
+		s.logger.Warn("validate config after sync",
 			zap.String("provider", p.Name),
 			zap.Error(err),
 		)
+	}
+
+	// Регистрируем в менеджере
+	s.manager.Register(controller)
+
+	// 2. Подключаем, если провайдер включён (AutoConnect будет добавлен позже)
+	if p.Enabled {
+		if err := controller.Connect(ctx); err != nil {
+			s.logger.Warn("connect provider after sync",
+				zap.String("provider", p.Name),
+				zap.Error(err),
+			)
+		}
 	}
 
 	s.logger.Info("provider synced from DB",
@@ -173,7 +183,7 @@ func (s *Service) RemoveProvider(ctx context.Context, name string) error {
 	if !ok {
 		return nil
 	}
-	if err := p.Remove(ctx); err != nil {
+	if err := p.Disconnect(ctx); err != nil {
 		return fmt.Errorf("remove provider %q: %w", name, err)
 	}
 	s.manager.Unregister(name)

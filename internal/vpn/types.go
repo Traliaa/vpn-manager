@@ -60,10 +60,21 @@ type Provider interface {
 	// Name returns a human-readable name for this provider instance.
 	Name() string
 
-	// ApplyConfig creates or updates the VPN interface with the given configuration.
+	// ApplyConfig parses, validates, and stores the configuration for later use.
+	// It does NOT create or modify the Linux interface — that happens in Connect().
+	// Returns an error if the configuration is invalid.
 	ApplyConfig(ctx context.Context, cfg interface{}) error
 
-	// Remove tears down the VPN interface.
+	// Connect establishes the VPN connection: creates the interface, applies
+	// configuration, sets IP address, brings the link up, and adds routes.
+	// If an interface already exists, it is cleaned up first (Disconnect).
+	Connect(ctx context.Context) error
+
+	// Disconnect tears down the VPN interface and removes all configuration.
+	Disconnect(ctx context.Context) error
+
+	// Remove is kept for backward compatibility during migration.
+	// Deprecated: use Disconnect instead.
 	Remove(ctx context.Context) error
 
 	// Status returns the current runtime status of the interface.

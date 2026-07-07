@@ -39,15 +39,29 @@ func (h *GatewayHandlers) Enable(w http.ResponseWriter, r *http.Request) {
 
 	// Find provider in manager
 	providers := h.manager.List()
+	var provider vpn.Provider
 	var ifaceName string
 	for _, p := range providers {
 		if p.Name() == req.ProviderName {
+			provider = p
 			ifaceName = p.InterfaceName()
 			break
 		}
 	}
-	if ifaceName == "" {
+	if ifaceName == "" || provider == nil {
 		writeError(w, http.StatusNotFound, "provider not found or has no interface")
+		return
+	}
+
+	// Проверяем, что провайдер действительно подключён
+	if status, err := provider.Status(r.Context()); err != nil || status.State != vpn.StateUp {
+		errMsg := "provider is not connected"
+		if err != nil {
+			errMsg += ": " + err.Error()
+		} else {
+			errMsg += " (state: " + string(status.State) + ")"
+		}
+		writeError(w, http.StatusBadRequest, errMsg)
 		return
 	}
 
