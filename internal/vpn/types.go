@@ -72,4 +72,8 @@ type Provider interface {
 	// HealthCheck performs a connectivity check through the VPN interface.
 	// Returns nil if the connection is healthy.
 	HealthCheck(ctx context.Context) error
+
+	// InterfaceName returns the Linux network interface name (e.g. "awg0", "wg0").
+	// Returns empty string if the provider has no direct interface (e.g. sing-box outbound).
+	InterfaceName() string
 }

@@ -68,6 +68,7 @@ func NewController(name string, cfg Config, logger *zap.Logger) (*Controller, er
 
 func (c *Controller) Type() vpn.ProviderType { return vpn.ProviderAmneziaWG }
 func (c *Controller) Name() string           { return c.name }
+func (c *Controller) InterfaceName() string  { return c.ifaceName }
 
 // sanitizeIfaceName создаёт корректное Linux-имя интерфейса из произвольной строки.
 func sanitizeIfaceName(name, prefix string) string {

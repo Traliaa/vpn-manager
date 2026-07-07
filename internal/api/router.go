@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *HaHandlers, logH *logs.HTTPHandler) *chi.Mux {
+func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *HaHandlers, logH *logs.HTTPHandler, gwH *GatewayHandlers) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -77,6 +77,12 @@ func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *H
 		r.Route("/ha", func(r chi.Router) {
 			r.Get("/status", haH.Status)
 			r.Post("/activate/{id}", haH.Activate)
+		})
+
+		r.Route("/gateway", func(r chi.Router) {
+			r.Get("/status", gwH.Status)
+			r.Post("/enable", gwH.Enable)
+			r.Post("/disable", gwH.Disable)
 		})
 	})
 

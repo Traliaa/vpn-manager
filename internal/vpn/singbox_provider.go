@@ -33,8 +33,9 @@ func NewSingBoxProvider(name string, ptype ProviderType, outbound singbox.Outbou
 	}
 }
 
-func (p *SingBoxProvider) Type() ProviderType { return p.ptype }
-func (p *SingBoxProvider) Name() string       { return p.name }
+func (p *SingBoxProvider) Type() ProviderType    { return p.ptype }
+func (p *SingBoxProvider) Name() string          { return p.name }
+func (p *SingBoxProvider) InterfaceName() string { return "" }
 
 // ApplyConfig adds or updates this provider's outbound in the sing-box config and reloads.
 // cfg must be a singbox.Outbound (e.g. vless.Config, hysteria2.Config).
