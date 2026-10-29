@@ -39,6 +39,7 @@ type Manager struct {
 	profile        *ProfileConfig
 	ready          bool
 	lastError      string
+	profileReady   func() bool
 }
 
 // NewManager creates a new gateway manager.
@@ -178,6 +179,10 @@ func (m *Manager) Status() GatewayStatus {
 	}
 	message := m.lastError
 	if m.profile != nil && m.enabled {
+		if m.profileReady == nil || !m.profileReady() {
+			ready = false
+			message = "active routing profile is not ready"
+		}
 		running, err := m.profileCtrl.IsRunning(context.Background())
 		if err != nil || !running {
 			ready = false

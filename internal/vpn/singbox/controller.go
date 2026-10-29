@@ -48,6 +48,7 @@ type Controller struct {
 	logger          *zap.Logger
 	process         managedprocess.Process
 	rollback        *configSnapshot
+	reloadHook      func(context.Context, bool) error
 }
 
 // Config holds the settings for the sing-box Controller.
@@ -223,7 +224,7 @@ func (c *Controller) reloadLocked(ctx context.Context) error {
 	if err := c.process.Stop(ctx); err != nil {
 		return err
 	}
-	if err := c.process.Start(ctx, c.binaryPath, []string{"run", "-c", c.configPath}, nil); err != nil {
+	if err := c.startRuntimeLocked(ctx); err != nil {
 		original := err
 		if c.rollback != nil {
 			if restoreErr := c.restoreLocked(c.rollback); restoreErr != nil {
@@ -233,7 +234,7 @@ func (c *Controller) reloadLocked(ctx context.Context) error {
 			if wasRunning {
 				recovery, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				return errors.Join(original, c.process.Start(recovery, c.binaryPath, []string{"run", "-c", c.configPath}, nil))
+				return errors.Join(original, c.startRuntimeLocked(recovery))
 			}
 		}
 		return original

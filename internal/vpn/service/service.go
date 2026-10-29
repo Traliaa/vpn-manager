@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/db"
 	"github.com/Traliaa/vpn-manager/internal/vpn"
@@ -24,9 +25,12 @@ import (
 
 // Service синхронизирует провайдеров из БД с VPN Manager.
 type Service struct {
-	manager      *vpn.Manager
-	sbCtrl       *singbox.Controller
-	queries      *db.Queries
+	manager *vpn.Manager
+	sbCtrl  *singbox.Controller
+	queries interface {
+		ListEnabledProviders(context.Context) ([]db.VpnProvider, error)
+	}
+	build        func(db.VpnProvider) (vpn.Provider, error)
 	logger       *zap.Logger
 	mu           sync.Mutex
 	fingerprints map[string][32]byte
@@ -58,71 +62,144 @@ func (s *Service) SyncProviders(ctx context.Context) error {
 		wanted[p.Name] = true
 	}
 	var errs []error
-	changed := false
-	for _, p := range s.manager.List() {
-		if !wanted[p.Name()] {
-			if err := s.removeProviderLocked(ctx, p.Name()); err != nil {
-				errs = append(errs, err)
-			} else {
-				changed = true
-			}
-		}
+	// Validate all desired replacements before removing any currently working
+	// provider, including a provider whose name is being changed.
+	type replacement struct {
+		record   db.VpnProvider
+		provider vpn.Provider
+		hash     [32]byte
 	}
+	var pending []replacement
 	for _, p := range providers {
 		fingerprint := sha256.Sum256([]byte(string(p.ProviderType) + "\x00" + p.Config))
 		if _, ok := s.manager.Get(p.Name); ok && s.fingerprints[p.Name] == fingerprint {
 			continue
 		}
-		if _, ok := s.manager.Get(p.Name); ok {
-			if err := s.removeProviderLocked(ctx, p.Name); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-		}
-		if err := s.syncProvider(ctx, p); err != nil {
+		candidate, err := s.prepareController(ctx, p)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("provider %q: %w", p.Name, err))
 			continue
 		}
-		s.fingerprints[p.Name] = fingerprint
-		changed = true
+		pending = append(pending, replacement{p, candidate, fingerprint})
 	}
-	if changed {
-		if err := s.sbCtrl.Reload(ctx); err != nil {
-			errs = append(errs, err)
+	if len(errs) > 0 {
+		for _, p := range pending {
+			closePrepared(p.provider)
+		}
+		return errors.Join(errs...)
+	}
+	for _, p := range pending {
+		if err := s.replaceProviderLocked(ctx, p.record, p.provider); err != nil {
+			errs = append(errs, fmt.Errorf("provider %q: %w", p.record.Name, err))
+			continue
+		}
+		s.fingerprints[p.record.Name] = p.hash
+	}
+	// A failed rename/startup keeps the previous name alive until the caller
+	// restores desired database state. Never discard its only working runtime.
+	if len(errs) == 0 {
+		changed := false
+		for _, p := range s.manager.List() {
+			if !wanted[p.Name()] {
+				if err := s.removeProviderLocked(ctx, p.Name()); err != nil {
+					errs = append(errs, err)
+				} else {
+					changed = true
+				}
+			}
+		}
+		if changed {
+			if err := s.sbCtrl.Reload(ctx); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)
 }
-func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
-	controller, err := s.buildController(p)
+func closePrepared(p vpn.Provider) {
+	if closer, ok := p.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+}
+func (s *Service) prepareController(ctx context.Context, p db.VpnProvider) (vpn.Provider, error) {
+	build := s.build
+	if build == nil {
+		build = s.buildController
+	}
+	controller, err := build(p)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var cfg any
-	if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
-		return fmt.Errorf("invalid provider JSON")
+	if err = json.Unmarshal([]byte(p.Config), &cfg); err != nil {
+		closePrepared(controller)
+		return nil, fmt.Errorf("invalid provider JSON")
 	}
-	if err := controller.ApplyConfig(ctx, cfg); err != nil {
-		return err
+	if err = controller.ApplyConfig(ctx, cfg); err != nil {
+		closePrepared(controller)
+		return nil, err
 	}
-	s.manager.Register(controller)
-	if err := controller.Connect(ctx); err != nil {
-		return err
+	if validator, ok := controller.(interface{ ValidateConfig() error }); ok {
+		if err = validator.ValidateConfig(); err != nil {
+			closePrepared(controller)
+			return nil, err
+		}
 	}
-	if controller.InterfaceName() != "" {
+	return controller, nil
+}
+func (s *Service) replaceProviderLocked(ctx context.Context, p db.VpnProvider, candidate vpn.Provider) error {
+	old, hadOld := s.manager.Get(p.Name)
+	previousOutbound, hadOutbound := s.sbCtrl.GetOutbound(p.Name)
+	// Legacy WireGuard has no safe owned reconnect lifecycle. Do not destroy an
+	// existing connection while replacing it; the AWG pilot uses owned userspace.
+	if hadOld && old.Type() == vpn.ProviderWireGuard {
+		closePrepared(candidate)
+		return fmt.Errorf("live replacement of legacy WireGuard requires an explicit restart")
+	}
+	if hadOld {
+		if err := old.Disconnect(ctx); err != nil {
+			closePrepared(candidate)
+			return err
+		}
+	}
+	rollback := func(cause error) error {
+		recovery, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cleanupErr := candidate.Disconnect(recovery)
+		closePrepared(candidate)
+		var restoreErr error
+		if hadOld {
+			restoreErr = old.Connect(recovery)
+		}
+		if hadOutbound {
+			restoreErr = errors.Join(restoreErr, s.sbCtrl.AddOutbound(recovery, previousOutbound))
+		} else {
+			restoreErr = errors.Join(restoreErr, s.sbCtrl.RemoveOutbound(recovery, p.Name))
+		}
+		if hadOld || hadOutbound {
+			restoreErr = errors.Join(restoreErr, s.sbCtrl.Reload(recovery))
+		}
+		return errors.Join(cause, cleanupErr, restoreErr)
+	}
+	if err := candidate.Connect(ctx); err != nil {
+		return rollback(err)
+	}
+	if candidate.InterfaceName() != "" {
 		var address struct {
 			Address string `json:"address"`
 		}
 		if err := json.Unmarshal([]byte(p.Config), &address); err != nil {
-			return err
+			return rollback(err)
 		}
-		if err := s.sbCtrl.AddOutbound(ctx, singbox.InterfaceOutbound{Name: p.Name, Interface: controller.InterfaceName(), Address: address.Address}); err != nil {
-			_ = controller.Disconnect(context.Background())
-			s.manager.Unregister(p.Name)
-			return err
+		if err := s.sbCtrl.AddOutbound(ctx, singbox.InterfaceOutbound{Name: p.Name, Interface: candidate.InterfaceName(), Address: address.Address}); err != nil {
+			return rollback(err)
 		}
-		s.manager.SetOutboundTag(p.Name, p.Name)
 	}
+	if err := s.sbCtrl.Reload(ctx); err != nil {
+		return rollback(err)
+	}
+	s.manager.Register(candidate)
+	s.manager.SetOutboundTag(p.Name, p.Name)
 	return nil
 }
 
@@ -150,7 +227,6 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 		}
 		cfg.OutboundTag = p.Name
 		provider := vpn.NewSingBoxProvider(p.Name, vpn.ProviderVLESS, cfg, s.sbCtrl, s.logger)
-		s.manager.SetOutboundTag(p.Name, p.Name)
 		return provider, nil
 
 	case db.ProviderTypeHysteria2:
@@ -160,7 +236,6 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 		}
 		cfg.OutboundTag = p.Name
 		provider := vpn.NewSingBoxProvider(p.Name, vpn.ProviderHysteria2, cfg, s.sbCtrl, s.logger)
-		s.manager.SetOutboundTag(p.Name, p.Name)
 		return provider, nil
 
 	case db.ProviderTypeTuic:
@@ -170,7 +245,6 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 		}
 		cfg.OutboundTag = p.Name
 		provider := vpn.NewSingBoxProvider(p.Name, vpn.ProviderTUIC, cfg, s.sbCtrl, s.logger)
-		s.manager.SetOutboundTag(p.Name, p.Name)
 		return provider, nil
 
 	case db.ProviderTypeShadowsocks:
@@ -180,7 +254,6 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 		}
 		cfg.OutboundTag = p.Name
 		provider := vpn.NewSingBoxProvider(p.Name, vpn.ProviderShadowsocks, cfg, s.sbCtrl, s.logger)
-		s.manager.SetOutboundTag(p.Name, p.Name)
 		return provider, nil
 
 	default:

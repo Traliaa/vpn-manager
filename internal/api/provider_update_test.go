@@ -75,7 +75,10 @@ func TestProviderApplyFailureIsVisible(t *testing.T) {
 	req.SetPathValue("id", "11111111-1111-1111-1111-111111111111")
 	w := httptest.NewRecorder()
 	h.UpdateProvider(w, req)
-	if w.Code < 400 || sync.calls != 1 {
+	if d.value.Enabled != true {
+		t.Fatal("failed apply persisted disabled configuration")
+	}
+	if w.Code < 400 || sync.calls < 1 {
 		t.Fatalf("failed apply reported success: %d", w.Code)
 	}
 }

@@ -117,12 +117,22 @@ func startResolver(lc fx.Lifecycle, svc *resolver.Service, cfg *config.Config, l
 func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queries *db.Queries, svc *service.Service, gw *gateway.Manager, manager *vpn.Manager, sb *singbox.Controller, logger *zap.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
+			gw.SetProfileReadiness(func() bool { return activator.ActiveProfile() != nil })
 			// Restore desired gateway state only after providers/profile are prepared.
 			defer func() {
 				if err := gw.Restore(ctx); err != nil {
 					logger.Error("gateway restore failed", zap.Error(err))
 				}
 			}()
+
+			// A persisted config may still contain the old gateway input. Disarm it
+			// before provider reconciliation; only Restore may recreate it after the
+			// active profile has been accepted. This prevents a stale/missing profile
+			// from capturing through an implicit direct route during startup.
+			if err := sb.SetGateway(ctx, false); err != nil {
+				logger.Error("cannot prepare proxy without gateway input", zap.Error(err))
+				return nil
+			}
 
 			// Синхронизируем провайдеров из БД в менеджер
 			if err := svc.SyncProviders(ctx); err != nil {

@@ -16,6 +16,7 @@ func NewProfileManager(logger *zap.Logger, ctrl *singbox.Controller, cfg *config
 	m := NewManager(logger)
 	m.profileCtrl = ctrl
 	m.statePath = cfg.VPN.GatewayStatePath
+	m.configureReloadHook()
 	return m
 }
 func canonicalObjects(raw []byte, selected func(map[string]any) bool) ([]string, error) {
@@ -38,14 +39,29 @@ func canonicalObjects(raw []byte, selected func(map[string]any) bool) ([]string,
 }
 func nftFingerprint(raw []byte) (string, error) {
 	var data struct {
-		NFT []map[string]json.RawMessage `json:"nftables"`
+		NFT []map[string]any `json:"nftables"`
 	}
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return "", err
 	}
-	var objects []map[string]json.RawMessage
+	var stripHandles func(any)
+	stripHandles = func(value any) {
+		switch v := value.(type) {
+		case map[string]any:
+			delete(v, "handle")
+			for _, child := range v {
+				stripHandles(child)
+			}
+		case []any:
+			for _, child := range v {
+				stripHandles(child)
+			}
+		}
+	}
+	var objects []map[string]any
 	for _, o := range data.NFT {
 		if _, meta := o["metainfo"]; !meta {
+			stripHandles(o)
 			objects = append(objects, o)
 		}
 	}
@@ -106,6 +122,7 @@ func contained(current, saved []string) bool {
 func (m *Manager) Restore(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.configureReloadHook()
 	return m.restoreLocked(ctx)
 }
 func (m *Manager) restoreLocked(ctx context.Context) (result error) {
@@ -141,34 +158,23 @@ func (m *Manager) restoreLocked(ctx context.Context) (result error) {
 	m.profile = &saved.Config
 	m.enabled = saved.Enabled
 	m.ready = false
-	if current.NAT == "" {
-		if _, err = m.ensureProfileNAT(ctx, saved.Config); err != nil {
-			return err
-		}
-	}
 	if !saved.Enabled {
+		if current.NAT == "" {
+			if _, err = m.ensureProfileNAT(ctx, saved.Config); err != nil {
+				return err
+			}
+		}
 		m.ifaceName = saved.Config.LANInterface
 		m.ready = true
 		return nil
 	}
-	if err = m.profileCtrl.SetGateway(ctx, true); err != nil {
-		return err
-	}
-	running, err := m.profileCtrl.IsRunning(ctx)
-	if err != nil {
-		return err
-	}
-	if !running {
-		return fmt.Errorf("transparent proxy is not running")
-	}
-	// Exact "add" operations are safe only for records missing from our saved
-	// ownership snapshot. Never replace or flush the policy table.
-	for _, route := range profileRoutes() {
-		if routePresent(current.Routes, route) {
-			continue
-		}
-		if err = m.route(ctx, "add", route); err != nil {
-			return err
+	// Reconstruct the blackhole and source rule before permitting any direct
+	// fallback. A missing database/profile must never turn capture into direct.
+	for _, route := range profileRoutes()[:4] {
+		if !routePresent(current.Routes, route) {
+			if err = m.route(ctx, "add", route); err != nil {
+				return err
+			}
 		}
 	}
 	if len(current.Rules) == 0 {
@@ -176,9 +182,45 @@ func (m *Manager) restoreLocked(ctx context.Context) (result error) {
 			return err
 		}
 	}
-	m.ifaceName = "vmtun0"
-	m.ready = true
-	return m.saveProfile(ctx, true, saved.Config)
+	if m.profileReady == nil || !m.profileReady() {
+		return fmt.Errorf("active routing profile is not ready; client remains blocked")
+	}
+	if current.NAT == "" {
+		if _, err = m.ensureProfileNAT(ctx, saved.Config); err != nil {
+			return err
+		}
+	}
+	return m.gatewayTransaction(ctx, true, func() error {
+		running, err := m.profileCtrl.IsRunning(ctx)
+		if err != nil {
+			return err
+		}
+		if !running {
+			return fmt.Errorf("transparent proxy is not running")
+		}
+		current, err = m.networkSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		// Exact "add" operations are safe only for records missing from our saved
+		// ownership snapshot. Never replace or flush the policy table.
+		for _, route := range profileRoutes() {
+			if routePresent(current.Routes, route) {
+				continue
+			}
+			if err = m.route(ctx, "add", route); err != nil {
+				return err
+			}
+		}
+		if len(current.Rules) == 0 {
+			if err = m.sourceRule(ctx, "add", saved.Config); err != nil {
+				return err
+			}
+		}
+		m.ifaceName = "vmtun0"
+		m.ready = true
+		return m.saveProfile(ctx, true, saved.Config)
+	})
 }
 func routePresent(records []string, route []string) bool {
 	typ := "unicast"

@@ -73,6 +73,9 @@ func (m *Manager) validateProfile(cfg ProfileConfig) error {
 	if err != nil || !ip.Is4() || !ip.IsPrivate() || !ip.IsGlobalUnicast() {
 		return fmt.Errorf("client must be one private IPv4 address")
 	}
+	if cfg.ClientIP != "192.168.1.71" {
+		return fmt.Errorf("pilot gateway is restricted to 192.168.1.71")
+	}
 	if !interfacePattern.MatchString(cfg.LANInterface) {
 		return fmt.Errorf("invalid LAN interface")
 	}
@@ -209,6 +212,10 @@ func (m *Manager) EnableProfile(ctx context.Context, cfg ProfileConfig) (result 
 	if err := m.validateProfile(cfg); err != nil {
 		return err
 	}
+	if m.profileReady == nil || !m.profileReady() {
+		return fmt.Errorf("active routing profile is not ready")
+	}
+	m.configureReloadHook()
 	if m.enabled {
 		if m.profile != nil && *m.profile == cfg {
 			running, err := m.profileCtrl.IsRunning(ctx)
@@ -262,34 +269,37 @@ func (m *Manager) EnableProfile(ctx context.Context, cfg ProfileConfig) (result 
 		}
 		return errors.Join(append([]error{cause}, cleanup...)...)
 	}
-	proxyAttempted = true
-	if err = m.profileCtrl.SetGateway(ctx, true); err != nil {
-		return rollback(err)
-	}
-	running, err := m.profileCtrl.IsRunning(ctx)
-	if err != nil {
-		return rollback(err)
-	}
-	if !running {
-		return rollback(fmt.Errorf("transparent proxy is not running"))
-	}
-	for _, r := range profileRoutes() {
-		if err = m.route(ctx, "add", r); err != nil {
-			return rollback(err)
+	stage := func() error {
+		running, err := m.profileCtrl.IsRunning(ctx)
+		if err != nil {
+			return err
 		}
-		installed = append(installed, r)
+		if !running {
+			return fmt.Errorf("transparent proxy is not running")
+		}
+		for _, r := range profileRoutes() {
+			if err = m.route(ctx, "add", r); err != nil {
+				return err
+			}
+			installed = append(installed, r)
+		}
+		if err = m.sourceRule(ctx, "add", cfg); err != nil {
+			return err
+		}
+		ruleInstalled = true
+		if err = m.saveProfile(ctx, true, cfg); err != nil {
+			return err
+		}
+		m.profile = &cfg
+		m.enabled = true
+		m.ready = true
+		m.ifaceName = "vmtun0"
+		return nil
 	}
-	if err = m.sourceRule(ctx, "add", cfg); err != nil {
+	proxyAttempted = true
+	if err = m.gatewayTransaction(ctx, true, stage); err != nil {
 		return rollback(err)
 	}
-	ruleInstalled = true
-	if err = m.saveProfile(ctx, true, cfg); err != nil {
-		return rollback(err)
-	}
-	m.profile = &cfg
-	m.enabled = true
-	m.ready = true
-	m.ifaceName = "vmtun0"
 	return nil
 }
 func (m *Manager) disableProfileLocked(ctx context.Context) error {

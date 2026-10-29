@@ -10,16 +10,26 @@ import (
 // host routes: the gateway manager owns source-specific routing separately.
 func (c *Controller) SetGateway(ctx context.Context, enabled bool) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.setGatewayLocked(ctx, enabled)
+}
+func (c *Controller) GatewayTransaction(ctx context.Context, enabled bool, stage func() error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.setGatewayLocked(ctx, enabled); err != nil {
+		return err
+	}
+	return stage()
+}
+func (c *Controller) setGatewayLocked(ctx context.Context, enabled bool) error {
 	next := cloneTemplate(c.baseTemplate)
 	var inputs []map[string]any
 	if raw, ok := next["inbounds"]; ok {
 		data, err := json.Marshal(raw)
 		if err != nil {
-			c.mu.Unlock()
 			return err
 		}
 		if err := json.Unmarshal(data, &inputs); err != nil {
-			c.mu.Unlock()
 			return err
 		}
 	} else {
@@ -31,7 +41,6 @@ func (c *Controller) SetGateway(ctx context.Context, enabled bool) error {
 			continue
 		}
 		if enabled && input["interface_name"] == "vmtun0" {
-			c.mu.Unlock()
 			return fmt.Errorf("gateway interface is already used by another input")
 		}
 		kept = append(kept, input)
@@ -42,9 +51,7 @@ func (c *Controller) SetGateway(ctx context.Context, enabled bool) error {
 	next["inbounds"] = kept
 	err := c.updateLocked(ctx, c.activeOutbounds, next)
 	if err != nil {
-		c.mu.Unlock()
 		return err
 	}
-	defer c.mu.Unlock()
 	return c.reloadLocked(ctx)
 }

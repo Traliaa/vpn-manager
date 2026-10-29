@@ -69,13 +69,14 @@ func gatewayFixture(t *testing.T) (*Manager, *fakeProxy, *profileHarness) {
 	p := &fakeProxy{}
 	h := &profileHarness{}
 	m.profileCtrl = p
+	m.SetProfileReadiness(func() bool { return true })
 	m.run = h.run
 	m.statePath = filepath.Join(t.TempDir(), "gateway.json")
 	m.localAddresses = func() ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("192.168.1.40")}, nil }
 	return m, p, h
 }
 func TestProfileRejectsUnsafeScopeBeforeNetworkChanges(t *testing.T) {
-	for _, raw := range []string{"", "192.168.1.0/24", "192.168.1.40", "127.0.0.1", "::1", "224.0.0.1"} {
+	for _, raw := range []string{"", "192.168.1.0/24", "192.168.1.72", "192.168.1.40", "127.0.0.1", "::1", "224.0.0.1"} {
 		m, p, h := gatewayFixture(t)
 		if err := m.EnableProfile(context.Background(), ProfileConfig{ClientIP: raw, LANInterface: "eth0"}); err == nil {
 			t.Errorf("accepted unsafe scope %q", raw)
@@ -220,5 +221,63 @@ func TestRecoveryRestoresOnlyConfiguredClientAfterProxyDeath(t *testing.T) {
 		if strings.HasPrefix(cmd, "ip -4 rule add") && !strings.Contains(cmd, "from 192.168.1.71/32 iif eth0") {
 			t.Fatalf("wrong scope: %s", cmd)
 		}
+	}
+}
+
+func TestProfileRequiresAcceptedActiveRoutingBeforeCapture(t *testing.T) {
+	m, p, h := gatewayFixture(t)
+	m.SetProfileReadiness(func() bool { return false })
+	if err := m.EnableProfile(context.Background(), ProfileConfig{ClientIP: "192.168.1.71", LANInterface: "eth0"}); err == nil {
+		t.Fatal("capture allowed without accepted profile")
+	}
+	if p.enabled || len(h.commands) > 0 {
+		t.Fatal("unprepared profile touched network")
+	}
+}
+func TestRestoreWithoutProfileRemainsFailClosed(t *testing.T) {
+	m, _, _ := gatewayFixture(t)
+	ctx := context.Background()
+	if err := m.EnableProfile(ctx, ProfileConfig{ClientIP: "192.168.1.71", LANInterface: "eth0"}); err != nil {
+		t.Fatal(err)
+	}
+	restored, p, h := gatewayFixture(t)
+	restored.statePath = m.statePath
+	h.nat = true
+	restored.SetProfileReadiness(func() bool { return false })
+	if err := restored.Restore(ctx); err == nil {
+		t.Fatal("missing profile restored as direct")
+	}
+	if p.enabled || restored.Status().Ready {
+		t.Fatal("unprepared profile reported ready")
+	}
+	blocked, scoped := false, false
+	for _, cmd := range h.commands {
+		if strings.Contains(cmd, "route add") && strings.Contains(cmd, "blackhole default") {
+			blocked = true
+		}
+		if strings.Contains(cmd, "rule add") && strings.Contains(cmd, "from 192.168.1.71/32 iif eth0") {
+			scoped = true
+		}
+	}
+	if !blocked || !scoped {
+		t.Fatal("startup failure did not install scoped fail-closed route")
+	}
+}
+
+func TestNFTOwnershipSurvivesRebootHandleChanges(t *testing.T) {
+	a, err := nftFingerprint([]byte(`{"nftables":[{"table":{"family":"inet","name":"vpn_manager_profile","handle":3,"comment":"vpn-manager profile gateway"}},{"chain":{"family":"inet","table":"vpn_manager_profile","name":"postrouting","handle":4,"type":"nat","hook":"postrouting","prio":100}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := nftFingerprint([]byte(`{"nftables":[{"table":{"family":"inet","name":"vpn_manager_profile","handle":103,"comment":"vpn-manager profile gateway"}},{"chain":{"family":"inet","table":"vpn_manager_profile","name":"postrouting","handle":104,"type":"nat","hook":"postrouting","prio":100}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatal("volatile handles invalidate equivalent owned rules")
+	}
+	c, _ := nftFingerprint([]byte(`{"nftables":[{"table":{"family":"inet","name":"vpn_manager_profile","comment":"someone else"}}]}`))
+	if a == c {
+		t.Fatal("foreign table fingerprint accepted")
 	}
 }

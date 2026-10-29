@@ -243,3 +243,53 @@ func TestStartupRebuildsMultipleProviderTargetsWithoutDirectFallback(t *testing.
 		t.Fatal(err)
 	}
 }
+
+func TestReloadRestoresGatewayRouteBeforeReportingSuccess(t *testing.T) {
+	c, err := NewController(Config{ConfigPath: filepath.Join(t.TempDir(), "config.json"), BinaryPath: fakeBinary(t, "if [ \"$1\" = check ]; then exit 0; fi\nexec sleep 60")}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop(context.Background())
+	calls := 0
+	c.SetReloadHook(func(_ context.Context, tun bool) error {
+		if !tun {
+			t.Fatal("missing gateway input")
+		}
+		calls++
+		return nil
+	})
+	if err = c.SetGateway(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("gateway route not restored on every reload: %d", calls)
+	}
+}
+
+func TestGatewayStagingExcludesConcurrentConfigChanges(t *testing.T) {
+	c, err := NewController(Config{ConfigPath: filepath.Join(t.TempDir(), "config.json"), BinaryPath: fakeBinary(t, "if [ \"$1\" = check ]; then exit 0; fi\nexec sleep 60")}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop(context.Background())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- c.GatewayTransaction(context.Background(), true, func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	if c.mu.TryLock() {
+		c.mu.Unlock()
+		close(release)
+		<-done
+		t.Fatal("configuration lock released before routes and state staged")
+	}
+	close(release)
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+}

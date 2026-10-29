@@ -53,6 +53,7 @@ func TestLinuxProfileGatewayLifecycle(t *testing.T) {
 	defer ctrl.Stop(context.Background())
 	m := NewManager(zap.NewNop())
 	m.profileCtrl = ctrl
+	m.SetProfileReadiness(func() bool { return true })
 	m.statePath = filepath.Join(t.TempDir(), "gateway.json")
 	cfg := ProfileConfig{ClientIP: "192.168.1.71", LANInterface: "eth0"}
 	if err = m.EnableProfile(ctx, cfg); err != nil {
@@ -69,6 +70,15 @@ func TestLinuxProfileGatewayLifecycle(t *testing.T) {
 	route = command("ip", "-4", "route", "get", "192.168.1.200", "from", cfg.ClientIP, "iif", "eth0")
 	if strings.Contains(route, "vmtun0") {
 		t.Fatal("LAN destination intercepted")
+	}
+	// Ordinary profile/provider reload must restore the source capture route
+	// before the operation reports success, not wait for a health-check tick.
+	if err = ctrl.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	route = command("ip", "-4", "route", "get", "198.51.100.1", "from", cfg.ClientIP, "iif", "eth0")
+	if !strings.Contains(route, "dev vmtun0") {
+		t.Fatal("ordinary reload lost capture route")
 	}
 	// Simulate unexpected child exit. Its TUN default disappears, while the
 	// persistent blackhole prevents falling through to the host main route.

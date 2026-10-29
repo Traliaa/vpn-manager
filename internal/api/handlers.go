@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/db"
+	"github.com/Traliaa/vpn-manager/internal/routing"
 	"github.com/Traliaa/vpn-manager/internal/vpn/service"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -16,14 +17,15 @@ import (
 )
 
 type Handlers struct {
-	q      *db.Queries
-	pool   *pgxpool.Pool
-	logger *zap.Logger
-	svc    interface{ SyncProviders(context.Context) error }
+	activator interface{ Reapply(context.Context) error }
+	q         *db.Queries
+	pool      *pgxpool.Pool
+	logger    *zap.Logger
+	svc       interface{ SyncProviders(context.Context) error }
 }
 
-func NewHandlers(q *db.Queries, pool *pgxpool.Pool, logger *zap.Logger, svc *service.Service) *Handlers {
-	return &Handlers{q: q, pool: pool, logger: logger, svc: svc}
+func NewHandlers(q *db.Queries, pool *pgxpool.Pool, logger *zap.Logger, svc *service.Service, activator *routing.Activator) *Handlers {
+	return &Handlers{q: q, pool: pool, logger: logger, svc: svc, activator: activator}
 }
 
 // ---- helpers ----
@@ -213,11 +215,30 @@ func (h *Handlers) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.audit(r.Context(), "update", "vpn_providers", id, nil)
-	if err := h.svc.SyncProviders(r.Context()); err != nil {
-		h.logger.Error("provider saved but runtime apply failed", zap.Error(err))
-		writeError(w, http.StatusBadGateway, "settings saved, but runtime apply failed; check provider status and retry synchronization")
+	applyErr := h.svc.SyncProviders(r.Context())
+	if applyErr == nil && h.activator != nil {
+		applyErr = h.activator.Reapply(r.Context())
+	}
+	if applyErr != nil {
+		h.logger.Error("provider apply failed", zap.Error(applyErr))
+		recovery, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, restoreErr := h.q.UpdateProvider(recovery, db.UpdateProviderParams{ID: current.ID, Name: current.Name, ProviderType: current.ProviderType, Config: current.Config, Enabled: current.Enabled, Priority: current.Priority, HealthHost: current.HealthHost})
+		if restoreErr == nil {
+			restoreErr = h.svc.SyncProviders(recovery)
+		}
+		if restoreErr == nil && h.activator != nil {
+			restoreErr = h.activator.Reapply(recovery)
+		}
+		if restoreErr != nil {
+			h.logger.Error("provider rollback incomplete", zap.Error(restoreErr))
+			writeError(w, http.StatusBadGateway, "apply failed; rollback incomplete, inspect provider status before retrying")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "apply failed; previous provider settings and runtime restored")
 		return
 	}
+
 	writeJSON(w, http.StatusOK, provider)
 }
 
