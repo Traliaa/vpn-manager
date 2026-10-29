@@ -42,6 +42,7 @@ func (m *Manager) Unregister(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.providers, name)
+	delete(m.outboundTags, name)
 	m.logger.Info("provider unregistered", zap.String("name", name))
 }
 

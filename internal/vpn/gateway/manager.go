@@ -4,6 +4,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"strings"
 	"sync"
@@ -15,8 +16,12 @@ const nftTableName = "vpn_manager_nat"
 
 // GatewayStatus represents the current gateway state.
 type GatewayStatus struct {
-	Enabled   bool   `json:"enabled"`
-	Interface string `json:"interface,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	Ready        bool   `json:"ready"`
+	ClientIP     string `json:"client_ip,omitempty"`
+	Error        string `json:"error,omitempty"`
+	LANInterface string `json:"lan_interface,omitempty"`
+	Interface    string `json:"interface,omitempty"`
 }
 
 // Manager controls IP forwarding and nftables masquerade rules.
@@ -25,14 +30,22 @@ type Manager struct {
 	enabled   bool
 	ifaceName string
 	// ipForwardOrig сохраняет значение net.ipv4.ip_forward до вмешательства менеджера.
-	ipForwardOrig string
-	logger        *zap.Logger
+	ipForwardOrig  string
+	logger         *zap.Logger
+	profileCtrl    profileController
+	run            commandRunner
+	statePath      string
+	localAddresses func() ([]netip.Addr, error)
+	profile        *ProfileConfig
+	ready          bool
+	lastError      string
 }
 
 // NewManager creates a new gateway manager.
 func NewManager(logger *zap.Logger) *Manager {
 	return &Manager{
 		logger: logger.Named("gateway"),
+		run:    runCommand, localAddresses: interfaceAddresses,
 	}
 }
 
@@ -63,6 +76,9 @@ func (m *Manager) Enable(ctx context.Context, ifaceName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.profile != nil {
+		return fmt.Errorf("release profile gateway before enabling legacy NAT mode")
+	}
 	if m.enabled && m.ifaceName == ifaceName {
 		m.logger.Info("gateway already enabled", zap.String("iface", ifaceName))
 		return nil
@@ -121,6 +137,9 @@ func (m *Manager) Enable(ctx context.Context, ifaceName string) error {
 func (m *Manager) Disable(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.profile != nil {
+		return m.disableProfileLocked(ctx)
+	}
 	return m.disableNolock(ctx)
 }
 
@@ -153,8 +172,34 @@ func (m *Manager) disableNolock(ctx context.Context) error {
 func (m *Manager) Status() GatewayStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	ready := m.ready
+	if m.profile == nil {
+		ready = m.enabled
+	}
+	message := m.lastError
+	if m.profile != nil && m.enabled {
+		running, err := m.profileCtrl.IsRunning(context.Background())
+		if err != nil || !running {
+			ready = false
+			message = "transparent proxy is not running"
+		}
+	}
 	return GatewayStatus{
-		Enabled:   m.enabled,
+		Enabled: m.enabled,
+		LANInterface: func() string {
+			if m.profile != nil {
+				return m.profile.LANInterface
+			}
+			return ""
+		}(),
+		Ready: ready,
+		Error: message,
+		ClientIP: func() string {
+			if m.profile != nil {
+				return m.profile.ClientIP
+			}
+			return ""
+		}(),
 		Interface: m.ifaceName,
 	}
 }

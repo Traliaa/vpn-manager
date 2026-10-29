@@ -17,6 +17,11 @@
   // Gateway state
   let gatewayStatus = { enabled: false, interface: '' };
   let gwProviderName = '';
+  let gwMode = 'profile';
+  let gwClientIP = '192.168.1.71';
+  let gwLAN = 'eth0';
+  let gwBusy = false;
+ let gwReleaseConfirmed = false;
 
   let txHistory = [];
   let rxHistory = [];
@@ -39,6 +44,7 @@
       routingProfile = routeData.profile || null;
       health = healthData;
       gatewayStatus = gwData;
+      if (gwData.client_ip) {gwMode = 'profile'; gwClientIP = gwData.client_ip; if (gwData.lan_interface) gwLAN = gwData.lan_interface;}
       loading = false;
 
       // Traffic tracking
@@ -109,17 +115,20 @@
 
   // Gateway control
   async function enableGateway() {
-    if (!gwProviderName) {
+    if (gwMode === 'nat' && !gwProviderName) {
       showToast('Выберите провайдера', 'error');
       return;
     }
     try {
-      await post('/gateway/enable', { provider_name: gwProviderName });
+      gwBusy = true;
+      await post('/gateway/enable', gwMode === 'profile'
+        ? {mode: 'profile', client_ip: gwClientIP.trim(), lan_interface: gwLAN.trim()}
+        : {provider_name: gwProviderName});
       showToast('✅ Gateway включён');
       load();
     } catch (e) {
       showToast('Ошибка: ' + e.message, 'error');
-    }
+    } finally { gwBusy = false; }
   }
 
   async function disableGateway() {
@@ -129,7 +138,15 @@
       load();
     } catch (e) {
       showToast('Ошибка: ' + e.message, 'error');
-    }
+    } finally { gwBusy = false; }
+  }
+
+  async function releaseGateway() {
+    if (!gwReleaseConfirmed) return;
+    gwBusy = true;
+    try {await post('/gateway/release', {router_policy_removed: true}); gwReleaseConfirmed = false; await load();}
+    catch (e) {showToast(e.message, 'error');}
+    finally {gwBusy = false;}
   }
 
   // Providers with interfaces for gateway
@@ -186,36 +203,53 @@
 
     <!-- Gateway Control -->
     <div class="section">
-      <h2>🚪 Gateway (NAT/Masquerade)</h2>
+      <h2>Шлюз для устройства</h2>
+      <p>Роутер направляет выбранное устройство на этот сервер. Активный профиль распределяет трафик между VPN и прямым выходом.</p>
       <div class="gateway-box">
         <div class="gateway-status">
           <span class="badge" class:badge-up={gatewayStatus.enabled} class:badge-down={!gatewayStatus.enabled}>
-            {gatewayStatus.enabled ? '🟢 Активен' : '🔴 Выключен'}
+            {gatewayStatus.enabled ? (gatewayStatus.ready ? 'Активен' : 'Не готов') : (gatewayStatus.client_ip ? 'Прямой выход' : 'Выключен')}
           </span>
           {#if gatewayStatus.interface}
             <span class="gateway-iface">Интерфейс: <strong>{gatewayStatus.interface}</strong></span>
           {/if}
         </div>
+        {#if gatewayStatus.client_ip}<span>Устройство: {gatewayStatus.client_ip}</span>{/if}
+        {#if gatewayStatus.error}<span class="error-hint">{gatewayStatus.error}</span>{/if}
         <div class="gateway-actions">
           {#if !gatewayStatus.enabled}
+            <select class="input select" bind:value={gwMode} aria-label="Режим шлюза" disabled={!!gatewayStatus.client_ip}>
+              <option value="profile">Распределять по профилю</option>
+              <option value="nat">Прежний NAT через VPN</option>
+            </select>
+            {#if gwMode === 'profile'}
+              <label>IP устройства <input class="input" bind:value={gwClientIP} placeholder="192.168.1.71" disabled={!!gatewayStatus.client_ip} /></label>
+              <label>LAN интерфейс <input class="input" bind:value={gwLAN} placeholder="eth0" /></label>
+            {:else}
             <select class="input select" bind:value={gwProviderName}>
               <option value="">Выберите провайдера</option>
               {#each gwCapableProviders as p}
                 <option value={p.name}>{p.name}</option>
               {/each}
             </select>
-            <button class="btn btn-primary" onclick={enableGateway} disabled={!gwProviderName}>
+            {/if}
+            <button class="btn btn-primary" onclick={enableGateway} disabled={gwBusy || (gwMode === 'nat' ? !gwProviderName : !gwClientIP || !gwLAN)}>
               🚀 Включить
             </button>
           {:else}
             <button class="btn btn-ghost" onclick={disableGateway}>
-              ⏹ Выключить
+              Отключить распределение
             </button>
           {/if}
         </div>
       </div>
     </div>
 
+    {#if gatewayStatus.client_ip && !gatewayStatus.enabled}
+      <p>Прямой выход сохранён, пока роутер направляет устройство сюда. Для полного удаления сначала верните обычную политику на роутере.</p>
+      <label><input type="checkbox" bind:checked={gwReleaseConfirmed} /> Устройство уже возвращено на обычную политику роутера</label>
+      <button class="btn btn-ghost" onclick={releaseGateway} disabled={!gwReleaseConfirmed || gwBusy}>Удалить настройки шлюза</button>
+    {/if}
     <!-- Interface Status -->
     <div class="section">
       <h2>Состояние провайдеров</h2>

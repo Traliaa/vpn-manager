@@ -1,0 +1,8 @@
+.git
+.superpowers
+.env
+.env.*
+*.log
+tmp
+frontend/node_modules
+frontend/dist

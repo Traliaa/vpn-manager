@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
-	"os/exec"
+	"errors"
+	"github.com/Traliaa/vpn-manager/internal/vpn/gateway"
+	"github.com/Traliaa/vpn-manager/internal/vpn/singbox"
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/api"
@@ -41,6 +43,7 @@ var Module = fx.Module("app",
 		startHealthChecker,
 		startResolver,
 		activateDefaultProfile,
+		startGatewayRecovery,
 		startBot,
 	),
 
@@ -68,11 +71,17 @@ func startHealthChecker(lc fx.Lifecycle, checker *health.Checker, cfg *config.Co
 
 	logger.Info("configuring health checker", zap.Duration("interval", interval))
 
+	var cancel context.CancelFunc
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			return checker.Start(ctx, interval)
+			lifetime, stop := context.WithCancel(context.Background())
+			cancel = stop
+			return checker.Start(lifetime, interval)
 		},
 		OnStop: func(ctx context.Context) error {
+			if cancel != nil {
+				cancel()
+			}
 			checker.Stop()
 			return nil
 		},
@@ -105,11 +114,15 @@ func startResolver(lc fx.Lifecycle, svc *resolver.Service, cfg *config.Config, l
 	})
 }
 
-func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queries *db.Queries, svc *service.Service, logger *zap.Logger) {
+func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queries *db.Queries, svc *service.Service, gw *gateway.Manager, manager *vpn.Manager, sb *singbox.Controller, logger *zap.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			// Загружаем VPN-модули ядра (если не загружены)
-			loadKernelModules(logger)
+			// Restore desired gateway state only after providers/profile are prepared.
+			defer func() {
+				if err := gw.Restore(ctx); err != nil {
+					logger.Error("gateway restore failed", zap.Error(err))
+				}
+			}()
 
 			// Синхронизируем провайдеров из БД в менеджер
 			if err := svc.SyncProviders(ctx); err != nil {
@@ -137,26 +150,11 @@ func activateDefaultProfile(lc fx.Lifecycle, activator *routing.Activator, queri
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
-			return nil
+			// Preserve desired capture and its blackhole fallback while stopping only
+			// owned child processes. The next startup restores the desired state.
+			return errors.Join(manager.StopAll(ctx), sb.Stop(ctx))
 		},
 	})
-}
-
-// loadKernelModules пытается загрузить VPN-модули ядра (wireguard, amneziawg).
-func loadKernelModules(logger *zap.Logger) {
-	modules := []string{"wireguard", "amneziawg"}
-	for _, mod := range modules {
-		if err := exec.Command("modprobe", mod).Run(); err != nil {
-			logger.Debug("kernel module not available",
-				zap.String("module", mod),
-				zap.Error(err),
-			)
-		} else {
-			logger.Info("kernel module loaded",
-				zap.String("module", mod),
-			)
-		}
-	}
 }
 
 // newBot creates a Telegram bot (no-op if token is empty).
@@ -173,6 +171,50 @@ func startBot(lc fx.Lifecycle, b *bot.Bot, logger *zap.Logger) {
 		},
 		OnStop: func(ctx context.Context) error {
 			b.Stop()
+			return nil
+		},
+	})
+}
+
+func startGatewayRecovery(lc fx.Lifecycle, gw *gateway.Manager, logger *zap.Logger) {
+	var cancel context.CancelFunc
+	var done chan struct{}
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			var ctx context.Context
+			ctx, cancel = context.WithCancel(context.Background())
+			done = make(chan struct{})
+			go func() {
+				defer close(done)
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						attempt, stop := context.WithTimeout(ctx, 8*time.Second)
+						if err := gw.Recover(attempt); err != nil {
+							logger.Error("gateway recovery failed", zap.Error(err))
+						}
+						stop()
+					}
+				}
+			}()
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			if cancel != nil {
+				cancel()
+			}
+			if done != nil {
+				select {
+				case <-done:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 			return nil
 		},
 	})

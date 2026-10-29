@@ -4,7 +4,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -22,11 +24,12 @@ import (
 
 // Service синхронизирует провайдеров из БД с VPN Manager.
 type Service struct {
-	manager *vpn.Manager
-	sbCtrl  *singbox.Controller
-	queries *db.Queries
-	logger  *zap.Logger
-	mu      sync.Mutex
+	manager      *vpn.Manager
+	sbCtrl       *singbox.Controller
+	queries      *db.Queries
+	logger       *zap.Logger
+	mu           sync.Mutex
+	fingerprints map[string][32]byte
 }
 
 // NewService создаёт сервис управления провайдерами.
@@ -43,63 +46,83 @@ func NewService(manager *vpn.Manager, sbCtrl *singbox.Controller, queries *db.Qu
 func (s *Service) SyncProviders(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	providers, err := s.queries.ListEnabledProviders(ctx)
 	if err != nil {
 		return fmt.Errorf("list enabled providers: %w", err)
 	}
-
+	if s.fingerprints == nil {
+		s.fingerprints = make(map[string][32]byte)
+	}
+	wanted := make(map[string]bool)
 	for _, p := range providers {
-		if err := s.syncProvider(ctx, p); err != nil {
-			s.logger.Error("failed to sync provider",
-				zap.String("name", p.Name),
-				zap.Error(err),
-			)
+		wanted[p.Name] = true
+	}
+	var errs []error
+	changed := false
+	for _, p := range s.manager.List() {
+		if !wanted[p.Name()] {
+			if err := s.removeProviderLocked(ctx, p.Name()); err != nil {
+				errs = append(errs, err)
+			} else {
+				changed = true
+			}
 		}
 	}
-
-	s.logger.Info("providers synced", zap.Int("count", len(providers)))
-	return nil
-}
-
-// syncProvider создаёт или обновляет контроллер для одного провайдера.
-func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
-	if _, ok := s.manager.Get(p.Name); ok {
-		return nil
+	for _, p := range providers {
+		fingerprint := sha256.Sum256([]byte(string(p.ProviderType) + "\x00" + p.Config))
+		if _, ok := s.manager.Get(p.Name); ok && s.fingerprints[p.Name] == fingerprint {
+			continue
+		}
+		if _, ok := s.manager.Get(p.Name); ok {
+			if err := s.removeProviderLocked(ctx, p.Name); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		if err := s.syncProvider(ctx, p); err != nil {
+			errs = append(errs, fmt.Errorf("provider %q: %w", p.Name, err))
+			continue
+		}
+		s.fingerprints[p.Name] = fingerprint
+		changed = true
 	}
-
+	if changed {
+		if err := s.sbCtrl.Reload(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
 	controller, err := s.buildController(p)
 	if err != nil {
-		return fmt.Errorf("build controller for %q: %w", p.Name, err)
+		return err
 	}
-
-	// 1. Применяем конфиг (только валидация)
-	var cfg interface{}
-	_ = json.Unmarshal([]byte(p.Config), &cfg)
+	var cfg any
+	if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
+		return fmt.Errorf("invalid provider JSON")
+	}
 	if err := controller.ApplyConfig(ctx, cfg); err != nil {
-		s.logger.Warn("validate config after sync",
-			zap.String("provider", p.Name),
-			zap.Error(err),
-		)
+		return err
 	}
-
-	// Регистрируем в менеджере
 	s.manager.Register(controller)
-
-	// 2. Подключаем, если провайдер включён (AutoConnect будет добавлен позже)
-	if p.Enabled {
-		if err := controller.Connect(ctx); err != nil {
-			s.logger.Warn("connect provider after sync",
-				zap.String("provider", p.Name),
-				zap.Error(err),
-			)
-		}
+	if err := controller.Connect(ctx); err != nil {
+		return err
 	}
-
-	s.logger.Info("provider synced from DB",
-		zap.String("name", p.Name),
-		zap.String("type", string(p.ProviderType)),
-	)
+	if controller.InterfaceName() != "" {
+		var address struct {
+			Address string `json:"address"`
+		}
+		if err := json.Unmarshal([]byte(p.Config), &address); err != nil {
+			return err
+		}
+		if err := s.sbCtrl.AddOutbound(ctx, singbox.InterfaceOutbound{Name: p.Name, Interface: controller.InterfaceName(), Address: address.Address}); err != nil {
+			_ = controller.Disconnect(context.Background())
+			s.manager.Unregister(p.Name)
+			return err
+		}
+		s.manager.SetOutboundTag(p.Name, p.Name)
+	}
 	return nil
 }
 
@@ -107,23 +130,11 @@ func (s *Service) syncProvider(ctx context.Context, p db.VpnProvider) error {
 func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 	switch p.ProviderType {
 	case db.ProviderTypeAmneziawg:
-		// Пробуем AmneziaWG, если не вышло — fallback на обычный WireGuard
-		var awgCfg amneziawg.Config
-		if err := json.Unmarshal([]byte(p.Config), &awgCfg); err == nil {
-			if ctrl, err := amneziawg.NewController(p.Name, awgCfg, s.logger); err == nil {
-				return ctrl, nil
-			}
-			s.logger.Warn("amneziawg controller failed, falling back to wireguard",
-				zap.String("provider", p.Name),
-				zap.Error(err),
-			)
+		var cfg amneziawg.Config
+		if err := json.Unmarshal([]byte(p.Config), &cfg); err != nil {
+			return nil, fmt.Errorf("unmarshal AmneziaWG config: %w", err)
 		}
-		// Fallback: используем WireGuard контроллер
-		var wgCfg wireguard.Config
-		if err := json.Unmarshal([]byte(p.Config), &wgCfg); err != nil {
-			return nil, fmt.Errorf("unmarshal fallback wireguard config: %w", err)
-		}
-		return wireguard.NewController(p.Name, wgCfg, s.logger)
+		return amneziawg.NewController(p.Name, cfg, s.logger)
 
 	case db.ProviderTypeWireguard:
 		var cfg wireguard.Config
@@ -179,13 +190,24 @@ func (s *Service) buildController(p db.VpnProvider) (vpn.Provider, error) {
 
 // RemoveProvider удаляет провайдера из менеджера.
 func (s *Service) RemoveProvider(ctx context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.removeProviderLocked(ctx, name)
+}
+func (s *Service) removeProviderLocked(ctx context.Context, name string) error {
 	p, ok := s.manager.Get(name)
 	if !ok {
 		return nil
 	}
+	if p.InterfaceName() != "" {
+		if err := s.sbCtrl.RemoveOutbound(ctx, name); err != nil {
+			return err
+		}
+	}
 	if err := p.Disconnect(ctx); err != nil {
-		return fmt.Errorf("remove provider %q: %w", name, err)
+		return err
 	}
 	s.manager.Unregister(name)
+	delete(s.fingerprints, name)
 	return nil
 }

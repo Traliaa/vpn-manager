@@ -1,20 +1,21 @@
 package importer
 
 import (
+	"strings"
 	"testing"
 )
 
 func TestParseWireGuard(t *testing.T) {
 	input := `[Interface]
-PrivateKey = eJX1z2Y3Q4R5T6U7V8W9X0Y1Z2A3B4C5D6E7F8G9H0I=
+PrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
 Address = 10.0.0.2/32
 DNS = 1.1.1.1
 MTU = 1420
 ListenPort = 51820
 
 [Peer]
-PublicKey = TH1D+M6tPebGD4xnEwwM0hosB4MfgwYjXIVzPG+qUls=
-PresharedKey = ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefgh=
+PublicKey = AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
+PresharedKey = AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=
 Endpoint = vpn.example.com:51820
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
@@ -29,7 +30,7 @@ PersistentKeepalive = 25
 		t.Error("expected false for WireGuard config")
 	}
 
-	if cfg.Interface.PrivateKey != "eJX1z2Y3Q4R5T6U7V8W9X0Y1Z2A3B4C5D6E7F8G9H0I=" {
+	if cfg.Interface.PrivateKey != "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" {
 		t.Errorf("unexpected PrivateKey: %q", cfg.Interface.PrivateKey)
 	}
 	if cfg.Interface.Address != "10.0.0.2/32" {
@@ -46,13 +47,13 @@ PersistentKeepalive = 25
 		t.Fatalf("expected 1 peer, got %d", len(cfg.Peers))
 	}
 	peer := cfg.Peers[0]
-	if peer.PublicKey != "TH1D+M6tPebGD4xnEwwM0hosB4MfgwYjXIVzPG+qUls=" {
+	if peer.PublicKey != "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=" {
 		t.Errorf("unexpected PublicKey: %q", peer.PublicKey)
 	}
 	if peer.Endpoint != "vpn.example.com:51820" {
 		t.Errorf("unexpected Endpoint: %q", peer.Endpoint)
 	}
-	if peer.PresharedKey != "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefgh=" {
+	if peer.PresharedKey != "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=" {
 		t.Errorf("unexpected PresharedKey: %q", peer.PresharedKey)
 	}
 	if len(peer.AllowedIPs) != 2 || peer.AllowedIPs[0] != "0.0.0.0/0" || peer.AllowedIPs[1] != "::/0" {
@@ -66,7 +67,7 @@ PersistentKeepalive = 25
 func TestParseAmneziaWG(t *testing.T) {
 	input := `[Interface]
 Address = 10.92.237.3/32
-PrivateKey = SOg5dR4SuxvA0o1XUt3DtQTvPZduxp3wDEChAj5E0F4=
+PrivateKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
 DNS = 1.1.1.1
 Jc = 3
 Jmin = 50
@@ -82,9 +83,9 @@ H4 = 713909618-713975153
 i1 = test-initial-packet-data
 
 [Peer]
-PublicKey = TH1D+M6tPebGD4xnEwwM0hosB4MfgwYjXIVzPG+qUls=
+PublicKey = AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
 AllowedIPs = 0.0.0.0/0
-Endpoint = 185.91.127.95:32486
+Endpoint = 192.0.2.22:51820
 PersistentKeepalive = 22
 `
 
@@ -97,7 +98,7 @@ PersistentKeepalive = 22
 		t.Error("expected true for AmneziaWG config")
 	}
 
-	if cfg.Interface.PrivateKey != "SOg5dR4SuxvA0o1XUt3DtQTvPZduxp3wDEChAj5E0F4=" {
+	if cfg.Interface.PrivateKey != "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=" {
 		t.Errorf("unexpected PrivateKey: %q", cfg.Interface.PrivateKey)
 	}
 	if cfg.Interface.Address != "10.92.237.3/32" {
@@ -126,10 +127,10 @@ PersistentKeepalive = 22
 		t.Fatalf("expected 1 peer, got %d", len(cfg.Peers))
 	}
 	peer := cfg.Peers[0]
-	if peer.PublicKey != "TH1D+M6tPebGD4xnEwwM0hosB4MfgwYjXIVzPG+qUls=" {
+	if peer.PublicKey != "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=" {
 		t.Errorf("unexpected PublicKey: %q", peer.PublicKey)
 	}
-	if peer.Endpoint != "185.91.127.95:32486" {
+	if peer.Endpoint != "192.0.2.22:51820" {
 		t.Errorf("unexpected Endpoint: %q", peer.Endpoint)
 	}
 	if len(peer.AllowedIPs) != 1 || peer.AllowedIPs[0] != "0.0.0.0/0" {
@@ -338,5 +339,24 @@ AllowedIPs = 0.0.0.0/0
 
 	if !cfg.IsAmneziaWG {
 		t.Error("config with Jc and Jmin should be detected as AmneziaWG")
+	}
+}
+
+func TestParseRejectsInvalidNumericParameters(t *testing.T) {
+	for _, field := range []string{"Jc = not-a-number", "S4 = broken", "PersistentKeepalive = wrong"} {
+		input := "[Interface]\nJc = 3\nS1 = 10\n" + field + "\n[Peer]\nPublicKey = test\n"
+		if strings.HasPrefix(field, "Persistent") {
+			input = "[Interface]\nJc = 3\nS1 = 10\n[Peer]\n" + field + "\n"
+		}
+		if _, err := Parse(input); err == nil {
+			t.Errorf("accepted %s", field)
+		}
+	}
+}
+
+func TestParseRejectsMultiplePeersInsteadOfMerging(t *testing.T) {
+	_, err := Parse("[Interface]\nAddress=10.0.0.2/32\n[Peer]\nPublicKey=first\n[Peer]\nPublicKey=second\n")
+	if err == nil {
+		t.Fatal("multiple peers silently merged")
 	}
 }

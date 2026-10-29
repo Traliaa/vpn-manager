@@ -83,6 +83,7 @@ func NewRouter(h *Handlers, vpnH *VpnHandlers, routingH *RoutingHandlers, haH *H
 			r.Get("/status", gwH.Status)
 			r.Post("/enable", gwH.Enable)
 			r.Post("/disable", gwH.Disable)
+			r.Post("/release", gwH.Release)
 		})
 	})
 

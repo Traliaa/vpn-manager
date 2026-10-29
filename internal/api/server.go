@@ -51,6 +51,6 @@ func RunServer(p ServerParams) {
 }
 
 var Module = fx.Module("api",
-	fx.Provide(NewHandlers, NewVpnHandlers, NewRoutingHandlers, NewHaHandlers, NewGatewayHandlers, gateway.NewManager, NewRouter, logs.NewHTTPHandler),
+	fx.Provide(NewHandlers, NewVpnHandlers, NewRoutingHandlers, NewHaHandlers, NewGatewayHandlers, gateway.NewProfileManager, NewRouter, logs.NewHTTPHandler),
 	fx.Invoke(RunServer),
 )

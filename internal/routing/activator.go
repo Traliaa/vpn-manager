@@ -22,6 +22,7 @@ type Activator struct {
 	manager *vpn.Manager
 	logger  *zap.Logger
 
+	applyMu         sync.Mutex
 	mu              sync.RWMutex
 	activeProfile   *db.Profile
 	activeProfileID pgtype.UUID
@@ -45,6 +46,8 @@ func NewActivator(
 // Activate activates a routing profile.
 // It loads the profile rules, builds a route config, and applies it via sing-box.
 func (a *Activator) Activate(ctx context.Context, profileID pgtype.UUID) error {
+	a.applyMu.Lock()
+	defer a.applyMu.Unlock()
 	a.logger.Info("activating profile", zap.Stringer("profile_id", profileID))
 
 	profile, err := a.queries.GetProfile(ctx, profileID)
@@ -81,6 +84,8 @@ func (a *Activator) Activate(ctx context.Context, profileID pgtype.UUID) error {
 
 // Deactivate deactivates the active profile, resetting routing to direct.
 func (a *Activator) Deactivate(ctx context.Context) error {
+	a.applyMu.Lock()
+	defer a.applyMu.Unlock()
 	a.mu.RLock()
 	hasActive := a.activeProfile != nil
 	a.mu.RUnlock()
@@ -139,11 +144,7 @@ func (a *Activator) buildRouteConfig(ctx context.Context, profileID pgtype.UUID)
 	for _, rule := range rules {
 		r, err := a.buildRouteRule(ctx, rule)
 		if err != nil {
-			a.logger.Warn("skip rule: build failed",
-				zap.Stringer("rule_id", rule.ID),
-				zap.Error(err),
-			)
-			continue
+			return singbox.RouteConfig{}, fmt.Errorf("rule %s: %w", rule.ID, err)
 		}
 		routeRules = append(routeRules, r)
 	}
@@ -162,50 +163,11 @@ func (a *Activator) buildRouteRule(ctx context.Context, rule db.ListEnabledRules
 		return singbox.RouteRule{}, fmt.Errorf("outbound tag for provider: %w", err)
 	}
 
-	r := singbox.RouteRule{
-		OutboundTag: outboundTag,
+	r, err := matchRule(rule.RuleType, rule.Value)
+	if err != nil {
+		return r, err
 	}
-
-	switch rule.RuleType {
-	case db.RuleTypeDomain:
-		r.Domain = []string{rule.Value}
-	case db.RuleTypeDomainSuffix:
-		r.DomainSuffix = []string{rule.Value}
-	case db.RuleTypeDomainKeyword:
-		r.DomainKeyword = []string{rule.Value}
-	case db.RuleTypeIp:
-		r.IPCIDR = []string{rule.Value}
-	case db.RuleTypeCidr:
-		r.IPCIDR = []string{rule.Value}
-	case db.RuleTypeGeosite:
-		r.DomainKeyword = []string{"geosite:" + rule.Value}
-	case db.RuleTypeGeoip:
-		r.IPCIDR = []string{"geoip:" + rule.Value}
-	case db.RuleTypeAsn:
-		r.IPCIDR = []string{"geoip:as" + rule.Value}
-	default:
-		a.logger.Warn("unknown rule type, treating as domain",
-			zap.String("rule_type", string(rule.RuleType)),
-			zap.String("value", rule.Value),
-		)
-		r.Domain = []string{rule.Value}
-	}
-
-	// For domain rules, load resolved IPs
-	if rule.RuleType == db.RuleTypeDomain ||
-		rule.RuleType == db.RuleTypeDomainSuffix ||
-		rule.RuleType == db.RuleTypeDomainKeyword {
-		resolvedIPs, err := a.loadResolvedIPs(ctx, rule.ID)
-		if err != nil {
-			a.logger.Warn("failed to load resolved IPs",
-				zap.Stringer("rule_id", rule.ID),
-				zap.Error(err),
-			)
-		}
-		if len(resolvedIPs) > 0 {
-			r.IPCIDR = append(r.IPCIDR, resolvedIPs...)
-		}
-	}
+	r.OutboundTag = outboundTag
 
 	return r, nil
 }
@@ -239,10 +201,7 @@ func (a *Activator) outboundTagForProvider(ctx context.Context, providerID pgtyp
 		return tag, nil
 	}
 
-	a.logger.Warn("outbound tag not found for provider, using name as tag",
-		zap.String("provider", provider.Name),
-	)
-	return provider.Name, nil
+	return "", fmt.Errorf("provider %q has no configured outbound", provider.Name)
 }
 
 // collectOutbounds collects all sing-box outbounds from the controller.

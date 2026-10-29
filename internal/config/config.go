@@ -30,10 +30,11 @@ type DatabaseConfig struct {
 }
 
 type VPNConfig struct {
-	BinDir         string
-	HealthInterval time.Duration
-	SingBox        SingBoxConfig
-	Resolver       ResolverConfig
+	GatewayStatePath string
+	BinDir           string
+	HealthInterval   time.Duration
+	SingBox          SingBoxConfig
+	Resolver         ResolverConfig
 }
 
 type SingBoxConfig struct {
@@ -75,8 +76,9 @@ func Load() *Config {
 			MigrationsDir:   getEnv("MIGRATIONS_DIR", "migrations"),
 		},
 		VPN: VPNConfig{
-			BinDir:         getEnv("VPN_BIN_DIR", "/usr/local/bin"),
-			HealthInterval: 30 * time.Second,
+			GatewayStatePath: getEnv("GATEWAY_STATE_PATH", "/var/lib/vpn-manager/gateway.json"),
+			BinDir:           getEnv("VPN_BIN_DIR", "/usr/local/bin"),
+			HealthInterval:   30 * time.Second,
 			SingBox: SingBoxConfig{
 				ConfigPath:  getEnv("SINGBOX_CONFIG_PATH", "/etc/sing-box/config.json"),
 				BinaryPath:  getEnv("SINGBOX_BINARY_PATH", "sing-box"),

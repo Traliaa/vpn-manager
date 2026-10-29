@@ -2,21 +2,38 @@ package amneziawg
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
+	"strconv"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Traliaa/vpn-manager/internal/vpn"
+	"github.com/Traliaa/vpn-manager/internal/vpn/managedprocess"
 	"github.com/advanced-wg/awgctrl-go"
 	"github.com/advanced-wg/awgctrl-go/wgtypes"
-	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
 )
 
 // Config представляет конфигурацию AmneziaWG.
 type Config struct {
+	ListenPort          int        `json:"listen_port,omitempty"`
+	TransportPadding    int        `json:"s4,omitempty"`
+	H1                  string     `json:"h1,omitempty"`
+	H2                  string     `json:"h2,omitempty"`
+	H3                  string     `json:"h3,omitempty"`
+	H4                  string     `json:"h4,omitempty"`
+	I2                  string     `json:"i2,omitempty"`
+	I3                  string     `json:"i3,omitempty"`
+	I4                  string     `json:"i4,omitempty"`
+	I5                  string     `json:"i5,omitempty"`
 	PrivateKey          string     `json:"private_key"`
 	Address             string     `json:"address"`
 	DNS                 string     `json:"dns,omitempty"`
@@ -40,362 +57,324 @@ type PeerConfig struct {
 	PersistentKeepalive int      `json:"persistent_keepalive,omitempty"`
 }
 
-// Controller управляет AmneziaWG-интерфейсом.
+type deviceClient interface {
+	ConfigureDevice(context.Context, string, wgtypes.Config) error
+	Device(context.Context, string) (*wgtypes.Device, error)
+	Close() error
+}
+type linkManager interface {
+	Exists(string) (bool, error)
+	Create(string) error
+	Configure(string, string, int) error
+	Remove(string) error
+}
+type serviceProcess interface {
+	Start(context.Context, string, []string, func() bool) error
+	Stop(context.Context) error
+	Running() bool
+}
+
+// Controller serializes configuration and owns only the interface/process it creates.
 type Controller struct {
-	name      string
-	ifaceName string
-	cfg       Config
-	logger    *zap.Logger
-	client    *wgctrl.Client
+	mu               sync.Mutex
+	name, ifaceName  string
+	cfg              Config
+	logger           *zap.Logger
+	client           deviceClient
+	newClient        func() (deviceClient, error)
+	links            linkManager
+	process          serviceProcess
+	owned, userspace bool
 }
 
-// NewController создаёт AmneziaWG-контроллер.
 func NewController(name string, cfg Config, logger *zap.Logger) (*Controller, error) {
-	client, err := wgctrl.New()
+	factory := func() (deviceClient, error) { return wgctrl.New() }
+	client, err := factory()
 	if err != nil {
-		return nil, fmt.Errorf("create wgctrl client: %w", err)
+		return nil, fmt.Errorf("create AWG client: %w", err)
 	}
-
-	return &Controller{
-		name:      name,
-		ifaceName: sanitizeIfaceName(name, "awg"),
-		cfg:       cfg,
-		logger:    logger.With(zap.String("interface", name), zap.String("type", "amneziawg")),
-		client:    client,
-	}, nil
+	return &Controller{name: name, ifaceName: sanitizeIfaceName(name, "awg"), cfg: cfg, logger: logger.With(zap.String("interface", name)), client: client, newClient: factory, links: &linuxLinks{}, process: &managedprocess.Process{}}, nil
 }
-
 func (c *Controller) Type() vpn.ProviderType { return vpn.ProviderAmneziaWG }
 func (c *Controller) Name() string           { return c.name }
 func (c *Controller) InterfaceName() string  { return c.ifaceName }
 
 // sanitizeIfaceName создаёт корректное Linux-имя интерфейса из произвольной строки.
 func sanitizeIfaceName(name, prefix string) string {
-	var result []rune
-	for _, r := range name {
-		if len(result) >= 12 {
-			break
-		}
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			result = append(result, r)
-		}
-	}
-	s := string(result)
-	if s == "" {
-		return prefix + "0"
-	}
-	if s[0] >= '0' && s[0] <= '9' {
-		s = prefix + "_" + s
-	}
-	return s
+	sum := sha256.Sum256([]byte(name))
+	return prefix + "_" + hex.EncodeToString(sum[:5])
 }
 
 // ApplyConfig парсит, валидирует и сохраняет конфигурацию.
 // Не создаёт и не изменяет интерфейс Linux — это делает Connect().
 func (c *Controller) ApplyConfig(ctx context.Context, cfg interface{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.owned {
+		return fmt.Errorf("disconnect provider before changing configuration")
+	}
+	next := c.cfg
 	switch v := cfg.(type) {
 	case Config:
-		c.cfg = v
+		next = v
 	case *Config:
-		if v != nil {
-			c.cfg = *v
+		if v == nil {
+			return fmt.Errorf("nil AmneziaWG config")
 		}
+		next = *v
 	default:
 		data, err := json.Marshal(cfg)
 		if err != nil {
 			return fmt.Errorf("invalid config type: %T", cfg)
 		}
-		if err := json.Unmarshal(data, &c.cfg); err != nil {
+		if err := json.Unmarshal(data, &next); err != nil {
 			return fmt.Errorf("unmarshal awg config: %w", err)
 		}
 		// Если peer-поля пустые — пробуем плоский формат
-		if c.cfg.Peer.Endpoint == "" && c.cfg.Peer.PublicKey == "" {
+		if next.Peer.Endpoint == "" && next.Peer.PublicKey == "" {
 			var flat struct {
 				PublicKey  string   `json:"public_key"`
 				Endpoint   string   `json:"endpoint"`
 				AllowedIPs []string `json:"allowed_ips"`
 			}
 			if err := json.Unmarshal(data, &flat); err == nil && flat.PublicKey != "" {
-				c.cfg.Peer.PublicKey = flat.PublicKey
+				next.Peer.PublicKey = flat.PublicKey
 				if flat.Endpoint != "" {
-					c.cfg.Peer.Endpoint = flat.Endpoint
+					next.Peer.Endpoint = flat.Endpoint
 				}
 				if len(flat.AllowedIPs) > 0 {
-					c.cfg.Peer.AllowedIPs = flat.AllowedIPs
+					next.Peer.AllowedIPs = flat.AllowedIPs
 				}
 				c.logger.Debug("migrated flat config to nested peer format")
 			}
 		}
 	}
 
-	if c.cfg.PrivateKey == "" || c.cfg.Peer.PublicKey == "" {
+	if next.PrivateKey == "" || next.Peer.PublicKey == "" {
 		return fmt.Errorf("incomplete config: missing private_key or peer.public_key")
 	}
 
+	if err := validateConfig(next); err != nil {
+		return err
+	}
+	c.cfg = next
 	c.logger.Info("config validated",
 		zap.String("iface", c.ifaceName),
-		zap.String("endpoint", c.cfg.Peer.Endpoint),
-		zap.Strings("allowed_ips", c.cfg.Peer.AllowedIPs),
+		zap.String("endpoint", next.Peer.Endpoint),
+		zap.Strings("allowed_ips", next.Peer.AllowedIPs),
 	)
 	return nil
 }
 
-// Connect создаёт интерфейс, применяет конфиг, поднимает его и настраивает маршруты.
+// Connect validates completely before performing any network mutation.
 func (c *Controller) Connect(ctx context.Context) error {
-	c.logger.Info("connecting AmneziaWG",
-		zap.String("iface", c.ifaceName),
-		zap.String("endpoint", c.cfg.Peer.Endpoint),
-	)
-
-	// 0. Если интерфейс уже существует — удаляем
-	if existing, err := netlink.LinkByName(c.ifaceName); err == nil {
-		c.logger.Debug("removing existing interface", zap.String("iface", c.ifaceName))
-		if err := netlink.LinkDel(existing); err != nil {
-			return fmt.Errorf("remove existing interface %s: %w", c.ifaceName, err)
-		}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connectLocked(ctx)
+}
+func (c *Controller) connectLocked(ctx context.Context) (retErr error) {
+	if err := validateConfig(c.cfg); err != nil {
+		return err
 	}
-
-	// 1. Создаём AmneziaWG-интерфейс
-	link := &netlink.GenericLink{
-		LinkAttrs: netlink.LinkAttrs{
-			Name: c.ifaceName,
-		},
-		LinkType: "amneziawg",
-	}
-	if err := netlink.LinkAdd(link); err != nil {
-		return fmt.Errorf("create amneziawg interface %s: %w", c.ifaceName, err)
-	}
-	c.logger.Debug("amneziawg interface created", zap.String("iface", c.ifaceName))
-
-	// 2. Применяем конфигурацию WG (ключи, пиры)
-	pubKey, err := wgtypes.ParseKey(c.cfg.Peer.PublicKey)
+	deviceCfg, err := buildDeviceConfig(ctx, c.cfg)
 	if err != nil {
-		return fmt.Errorf("invalid peer public key: %w", err)
+		return err
 	}
-	privKey, err := wgtypes.ParseKey(c.cfg.PrivateKey)
+	if c.owned {
+		exists, err := c.links.Exists(c.ifaceName)
+		if err != nil {
+			return err
+		}
+		if exists && (!c.userspace || c.process.Running()) {
+			return nil
+		}
+		if err := c.disconnectLocked(ctx); err != nil {
+			return err
+		}
+	}
+	exists, err := c.links.Exists(c.ifaceName)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		return err
 	}
-
-	allowedIPs := make([]net.IPNet, 0, len(c.cfg.Peer.AllowedIPs))
-	for _, s := range c.cfg.Peer.AllowedIPs {
-		p, err := netip.ParsePrefix(s)
+	if exists {
+		return fmt.Errorf("interface %s already exists and is not owned by this controller", c.ifaceName)
+	}
+	if c.client == nil {
+		c.client, err = c.newClient()
 		if err != nil {
-			return fmt.Errorf("invalid allowed IP %q: %w", s, err)
-		}
-		masked := p.Masked()
-		allowedIPs = append(allowedIPs, net.IPNet{
-			IP:   masked.Addr().AsSlice(),
-			Mask: net.CIDRMask(masked.Bits(), masked.Addr().BitLen()),
-		})
-	}
-
-	var endpoint *net.UDPAddr
-	if c.cfg.Peer.Endpoint != "" {
-		host, portStr, err := net.SplitHostPort(c.cfg.Peer.Endpoint)
-		if err != nil {
-			return fmt.Errorf("invalid endpoint %q: %w", c.cfg.Peer.Endpoint, err)
-		}
-		port, err := net.LookupPort("udp", portStr)
-		if err != nil {
-			return fmt.Errorf("invalid endpoint port %q: %w", portStr, err)
-		}
-		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if err != nil {
-			return fmt.Errorf("resolve endpoint %q: %w", host, err)
-		}
-		if len(ips) > 0 {
-			endpoint = net.UDPAddrFromAddrPort(netip.AddrPortFrom(ips[0], uint16(port)))
+			return fmt.Errorf("create AWG client: %w", err)
 		}
 	}
-
-	var keepalive *time.Duration
-	if c.cfg.Peer.PersistentKeepalive > 0 {
-		v := time.Duration(c.cfg.Peer.PersistentKeepalive) * time.Second
-		keepalive = &v
-	}
-
-	peerCfg := wgtypes.PeerConfig{
-		PublicKey:                   pubKey,
-		Endpoint:                    endpoint,
-		AllowedIPs:                  allowedIPs,
-		PersistentKeepaliveInterval: keepalive,
-		ReplaceAllowedIPs:           true,
-	}
-	if c.cfg.Peer.PresharedKey != "" {
-		psk, err := wgtypes.ParseKey(c.cfg.Peer.PresharedKey)
-		if err != nil {
-			return fmt.Errorf("invalid preshared key: %w", err)
+	success := false
+	defer func() {
+		if !success {
+			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			retErr = errors.Join(retErr, c.disconnectLocked(cleanup))
 		}
-		peerCfg.PresharedKey = &psk
+	}()
+	if err := c.links.Create(c.ifaceName); err != nil {
+		if !errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, syscall.EPROTONOSUPPORT) && !errors.Is(err, syscall.ENOENT) {
+			return fmt.Errorf("create AWG interface: %w", err)
+		}
+		c.userspace = true
+		binary := os.Getenv("AMNEZIAWG_GO_BINARY")
+		if binary == "" {
+			binary = "/usr/local/bin/amneziawg-go"
+		}
+		if err := c.process.Start(ctx, binary, []string{"-f", c.ifaceName}, func() bool { ok, err := c.links.Exists(c.ifaceName); return err == nil && ok }); err != nil {
+			return fmt.Errorf("start userspace AWG: %w", err)
+		}
 	}
-
-	deviceCfg := wgtypes.Config{
-		PrivateKey:   &privKey,
-		ReplacePeers: true,
-		Peers:        []wgtypes.PeerConfig{peerCfg},
-	}
+	c.owned = true
 	if err := c.client.ConfigureDevice(ctx, c.ifaceName, deviceCfg); err != nil {
-		return fmt.Errorf("configure device %s: %w", c.ifaceName, err)
+		return fmt.Errorf("configure AWG device: %w", err)
 	}
-	c.logger.Debug("device configured", zap.String("iface", c.ifaceName))
-
-	// 3. Устанавливаем MTU (если задан)
-	if c.cfg.MTU > 0 {
-		link, err := netlink.LinkByName(c.ifaceName)
-		if err != nil {
-			return fmt.Errorf("find interface %s: %w", c.ifaceName, err)
-		}
-		if err := netlink.LinkSetMTU(link, c.cfg.MTU); err != nil {
-			return fmt.Errorf("set MTU on %s: %w", c.ifaceName, err)
-		}
-		c.logger.Debug("MTU set", zap.String("iface", c.ifaceName), zap.Int("mtu", c.cfg.MTU))
+	mtu := c.cfg.MTU
+	if mtu == 0 {
+		mtu = 1420
 	}
-
-	// 4. Назначаем IP-адрес (если задан)
-	if c.cfg.Address != "" {
-		link, err := netlink.LinkByName(c.ifaceName)
-		if err != nil {
-			return fmt.Errorf("find interface %s: %w", c.ifaceName, err)
-		}
-		prefix, err := netip.ParsePrefix(c.cfg.Address)
-		if err != nil {
-			return fmt.Errorf("invalid address %q: %w", c.cfg.Address, err)
-		}
-		addr := &netlink.Addr{
-			IPNet: &net.IPNet{
-				IP:   prefix.Addr().AsSlice(),
-				Mask: net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen()),
-			},
-		}
-		if err := netlink.AddrAdd(link, addr); err != nil {
-			return fmt.Errorf("add address %s to %s: %w", c.cfg.Address, c.ifaceName, err)
-		}
-		c.logger.Debug("IP address assigned", zap.String("iface", c.ifaceName), zap.String("addr", c.cfg.Address))
+	if err := c.links.Configure(c.ifaceName, c.cfg.Address, mtu); err != nil {
+		return err
 	}
-
-	// 5. Поднимаем интерфейс
-	iface, err := netlink.LinkByName(c.ifaceName)
-	if err != nil {
-		return fmt.Errorf("find interface %s: %w", c.ifaceName, err)
-	}
-	if err := netlink.LinkSetUp(iface); err != nil {
-		return fmt.Errorf("bring up interface %s: %w", c.ifaceName, err)
-	}
-	c.logger.Debug("interface is up", zap.String("iface", c.ifaceName))
-
-	// 6. Добавляем маршруты (если нужны)
-	// Для каждого allowed_ip добавляем маршрут через интерфейс
-	for _, s := range c.cfg.Peer.AllowedIPs {
-		if s == "0.0.0.0/0" || s == "::/0" {
-			continue // default route — не добавляем, управляется маршрутизацией
-		}
-		prefix, err := netip.ParsePrefix(s)
-		if err != nil {
-			c.logger.Warn("skip invalid route", zap.String("route", s), zap.Error(err))
-			continue
-		}
-		dst := &net.IPNet{
-			IP:   prefix.Addr().AsSlice(),
-			Mask: net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen()),
-		}
-		route := &netlink.Route{
-			Dst:       dst,
-			LinkIndex: iface.Attrs().Index,
-		}
-		if err := netlink.RouteAdd(route); err != nil {
-			// Может уже существовать — не фатально
-			c.logger.Debug("route add", zap.String("route", s), zap.Error(err))
-		}
-	}
-
-	c.logger.Info("AmneziaWG connected",
-		zap.String("iface", c.ifaceName),
-	)
+	success = true
+	c.logger.Info("AmneziaWG interface configured", zap.Bool("userspace", c.userspace))
 	return nil
 }
-
-// Disconnect удаляет интерфейс и очищает конфигурацию.
-func (c *Controller) Disconnect(ctx context.Context) error {
-	c.logger.Info("disconnecting AmneziaWG", zap.String("iface", c.ifaceName))
-
-	if existing, err := netlink.LinkByName(c.ifaceName); err == nil {
-		if err := netlink.LinkDel(existing); err != nil {
-			return fmt.Errorf("remove interface %s: %w", c.ifaceName, err)
-		}
-		c.logger.Info("interface removed", zap.String("iface", c.ifaceName))
-	} else {
-		c.logger.Debug("interface not found, nothing to remove", zap.String("iface", c.ifaceName))
+func buildDeviceConfig(ctx context.Context, cfg Config) (wgtypes.Config, error) {
+	if err := validateConfig(cfg); err != nil {
+		return wgtypes.Config{}, err
 	}
-
+	private, _ := wgtypes.ParseKey(cfg.PrivateKey)
+	public, _ := wgtypes.ParseKey(cfg.Peer.PublicKey)
+	allowed := make([]net.IPNet, 0, len(cfg.Peer.AllowedIPs))
+	for _, raw := range cfg.Peer.AllowedIPs {
+		p, _ := netip.ParsePrefix(raw)
+		p = p.Masked()
+		allowed = append(allowed, net.IPNet{IP: p.Addr().AsSlice(), Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen())})
+	}
+	host, port, _ := net.SplitHostPort(cfg.Peer.Endpoint)
+	number, _ := strconv.Atoi(port)
+	resolve, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(resolve, "ip", host)
+	if err != nil {
+		return wgtypes.Config{}, fmt.Errorf("resolve VPN endpoint: %w", err)
+	}
+	if len(ips) == 0 {
+		return wgtypes.Config{}, fmt.Errorf("VPN endpoint has no addresses")
+	}
+	keepalive := time.Duration(cfg.Peer.PersistentKeepalive) * time.Second
+	peer := wgtypes.PeerConfig{PublicKey: public, Endpoint: net.UDPAddrFromAddrPort(netip.AddrPortFrom(ips[0], uint16(number))), AllowedIPs: allowed, ReplaceAllowedIPs: true, PersistentKeepaliveInterval: &keepalive}
+	if cfg.Peer.PresharedKey != "" {
+		psk, _ := wgtypes.ParseKey(cfg.Peer.PresharedKey)
+		peer.PresharedKey = &psk
+	}
+	result := wgtypes.Config{PrivateKey: &private, ListenPort: &cfg.ListenPort, ReplacePeers: true, Peers: []wgtypes.PeerConfig{peer}, Jc: &cfg.JunkPacketCount, Jmin: &cfg.JunkPacketMinSize, Jmax: &cfg.JunkPacketMaxSize, S1: &cfg.InitJunkPackets, S2: &cfg.ResponseJunkPackets, S3: &cfg.TransportPacketLen, S4: &cfg.TransportPadding}
+	for _, field := range []struct {
+		value  string
+		target **string
+	}{{cfg.H1, &result.H1}, {cfg.H2, &result.H2}, {cfg.H3, &result.H3}, {cfg.H4, &result.H4}, {cfg.TransportHeader, &result.I1}, {cfg.I2, &result.I2}, {cfg.I3, &result.I3}, {cfg.I4, &result.I4}, {cfg.I5, &result.I5}} {
+		if field.value != "" {
+			v := field.value
+			*field.target = &v
+		}
+	}
+	return result, nil
+}
+func (c *Controller) Disconnect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.disconnectLocked(ctx)
+}
+func (c *Controller) disconnectLocked(ctx context.Context) error {
+	var errs []error
+	if c.userspace {
+		if err := c.process.Stop(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.owned {
+		if err := c.links.Remove(c.ifaceName); err != nil {
+			errs = append(errs, err)
+		} else {
+			c.owned = false
+		}
+	}
+	c.userspace = false
 	if c.client != nil {
-		c.client.Close()
+		if err := c.client.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		c.client = nil
 	}
-	return nil
+	return errors.Join(errs...)
 }
-
-// Remove — бэкап-совместимость.
-// Deprecated: используйте Disconnect.
-func (c *Controller) Remove(ctx context.Context) error {
-	return c.Disconnect(ctx)
-}
-
-// Status возвращает текущее состояние интерфейса.
+func (c *Controller) Remove(ctx context.Context) error { return c.Disconnect(ctx) }
 func (c *Controller) Status(ctx context.Context) (*vpn.InterfaceStatus, error) {
-	// Проверяем, существует ли интерфейс через netlink
-	if _, err := netlink.LinkByName(c.ifaceName); err != nil {
-		return &vpn.InterfaceStatus{
-			Name:  c.name,
-			Type:  c.Type(),
-			State: vpn.StateDown,
-		}, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	status := &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown, LocalAddress: c.cfg.Address}
+	if !c.owned || c.client == nil {
+		return status, nil
 	}
-
-	if c.client == nil {
-		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown}, nil
+	if c.userspace && !c.process.Running() {
+		status.State = vpn.StateError
+		status.Error = "userspace VPN process exited"
+		return status, nil
 	}
-
+	exists, err := c.links.Exists(c.ifaceName)
+	if err != nil {
+		return status, err
+	}
+	if !exists {
+		return status, nil
+	}
 	dev, err := c.client.Device(ctx, c.ifaceName)
 	if err != nil {
-		return &vpn.InterfaceStatus{
-			Name:  c.name,
-			Type:  c.Type(),
-			State: vpn.StateError,
-		}, fmt.Errorf("get device status: %w", err)
+		return status, fmt.Errorf("read VPN status: %w", err)
 	}
 	if dev == nil {
-		return &vpn.InterfaceStatus{Name: c.name, Type: c.Type(), State: vpn.StateDown}, nil
+		return status, nil
 	}
-
-	status := &vpn.InterfaceStatus{
-		Name:      c.name,
-		Type:      c.Type(),
-		State:     vpn.StateUp,
-		PublicKey: dev.PublicKey.String(),
-	}
+	status.PublicKey = dev.PublicKey.String()
+	status.State = vpn.StateUnknown
 	if len(dev.Peers) > 0 {
 		peer := dev.Peers[0]
-		status.Endpoint = peer.Endpoint.String()
+		if peer.Endpoint != nil {
+			status.Endpoint = peer.Endpoint.String()
+		}
 		status.TxBytes = peer.TransmitBytes
 		status.RxBytes = peer.ReceiveBytes
-		if !peer.LastHandshakeTime.IsZero() {
-			status.LastHandshake = peer.LastHandshakeTime
+		status.LastHandshake = peer.LastHandshakeTime
+		if !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) >= 0 && time.Since(peer.LastHandshakeTime) <= 3*time.Minute {
+			status.State = vpn.StateUp
+		} else {
+			status.Error = "waiting for a recent VPN handshake"
 		}
 	}
 	return status, nil
 }
-
-// HealthCheck проверяет доступность через VPN-интерфейс.
 func (c *Controller) HealthCheck(ctx context.Context) error {
-	_, err := c.Status(ctx)
-	return err
-}
-
-// Close освобождает ресурсы wgctrl.
-func (c *Controller) Close() error {
-	if c.client != nil {
-		c.client.Close()
+	c.mu.Lock()
+	if c.owned && c.userspace && !c.process.Running() {
+		if err := c.connectLocked(ctx); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+	}
+	c.mu.Unlock()
+	s, err := c.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if s == nil || s.State != vpn.StateUp {
+		return fmt.Errorf("VPN is not ready")
 	}
 	return nil
+}
+func (c *Controller) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.Disconnect(ctx)
 }

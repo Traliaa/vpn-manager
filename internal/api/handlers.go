@@ -19,7 +19,7 @@ type Handlers struct {
 	q      *db.Queries
 	pool   *pgxpool.Pool
 	logger *zap.Logger
-	svc    *service.Service
+	svc    interface{ SyncProviders(context.Context) error }
 }
 
 func NewHandlers(q *db.Queries, pool *pgxpool.Pool, logger *zap.Logger, svc *service.Service) *Handlers {
@@ -87,8 +87,8 @@ func (h *Handlers) CreateProvider(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid config")
 			return
-			cfgStr = string(data)
 		}
+		cfgStr = string(data)
 	}
 
 	enabled := true
@@ -185,8 +185,8 @@ func (h *Handlers) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid config")
 			return
-			cfgStr = string(data)
 		}
+		cfgStr = string(data)
 	}
 	enabled := current.Enabled
 	if req.Enabled != nil {
@@ -213,10 +213,10 @@ func (h *Handlers) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.audit(r.Context(), "update", "vpn_providers", id, nil)
-	if enabled && !current.Enabled {
-		if err := h.svc.SyncProviders(r.Context()); err != nil {
-			h.logger.Warn("sync after enable", zap.Error(err))
-		}
+	if err := h.svc.SyncProviders(r.Context()); err != nil {
+		h.logger.Error("provider saved but runtime apply failed", zap.Error(err))
+		writeError(w, http.StatusBadGateway, "settings saved, but runtime apply failed; check provider status and retry synchronization")
+		return
 	}
 	writeJSON(w, http.StatusOK, provider)
 }
@@ -235,6 +235,11 @@ func (h *Handlers) DeleteProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.audit(r.Context(), "delete", "vpn_providers", id, nil)
+	if err := h.svc.SyncProviders(r.Context()); err != nil {
+		h.logger.Error("provider deleted but runtime reconciliation failed", zap.Error(err))
+		writeError(w, http.StatusBadGateway, "provider deleted, but runtime cleanup failed; retry synchronization")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
