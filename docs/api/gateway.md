@@ -53,3 +53,10 @@ Only forwarded source traffic arriving on that LAN interface is intercepted. The
 Status adds `client_subnet`, `router_ip`, `manager_ip`; `mode` is `router` while such scope is retained, including disabled direct mode. Existing single-client requests/state stay supported. An enabled pilot may expand to a matching connected LAN scope through the same enable endpoint. The transaction validates ownership, stages broader rules, atomically replaces the owned nft table, removes the pilot rule, and persists the new scope. Failures restore the previous scope; incomplete rollback is an error and never reports ready. Other scope changes require coordinated disable/release.
 
 Disable retains direct forwarding/NAT for all router-selected clients. Release requires `router_policy_removed=true` for **all** assigned clients. Keep the manager itself on its WAN-only Keenetic policy. Selecting devices changes who sends packets to the gateway; it does not authorize new inbound access or expose the panel publicly.
+
+
+### Keenetic LAN source NAT
+
+Live packet capture established that this Keenetic replaces selected clients' source addresses with its LAN address when forwarding through a same-LAN next hop. For this topology set `router_nat:true` in router mode. The manager then captures the forwarded router source too, and includes it in direct fallback masquerading. Its own source remains excluded. Locally originated manager connections use the separate WAN-only Keenetic policy, preventing recirculation. Without this flag the original router-source bypass is preserved for compatibility.
+
+An enabled router scope may upgrade from `router_nat:false` to `true` with every other field unchanged. Only the difference in owned rules is changed, under the same rollback/ownership transaction; common rules are never duplicated. Status exposes `router_nat`. The panel defaults new router setup to NAT compatibility and offers an explicit upgrade button for an existing scope. Source NAT means the manager cannot identify individual original clients; client selection remains entirely in Keenetic.

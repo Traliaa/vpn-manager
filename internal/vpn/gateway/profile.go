@@ -27,6 +27,7 @@ var interfacePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,15}$`)
 type ProfileConfig struct {
 	ClientIP     string `json:"client_ip,omitempty"`
 	ClientSubnet string `json:"client_subnet,omitempty"`
+	RouterNAT    bool   `json:"router_nat,omitempty"`
 	RouterIP     string `json:"router_ip,omitempty"`
 	ManagerIP    string `json:"manager_ip,omitempty"`
 	LANInterface string `json:"lan_interface"`
@@ -75,7 +76,7 @@ func (m *Manager) validateProfile(cfg ProfileConfig) error {
 	if cfg.ClientSubnet != "" {
 		return m.validateRouterScope(cfg)
 	}
-	if cfg.RouterIP != "" || cfg.ManagerIP != "" {
+	if cfg.RouterIP != "" || cfg.ManagerIP != "" || cfg.RouterNAT {
 		return fmt.Errorf("router fields require client_subnet")
 	}
 	ip, err := netip.ParseAddr(cfg.ClientIP)
@@ -191,8 +192,11 @@ func (m *Manager) ensureProfileNAT(ctx context.Context, cfg ProfileConfig) (bool
 	return err == nil, err
 }
 func (m *Manager) sourceRule(ctx context.Context, action string, cfg ProfileConfig) error {
+	return m.changeSourceRules(ctx, action, orderedSourceRules(cfg, action))
+}
+func (m *Manager) changeSourceRules(ctx context.Context, action string, rules [][]string) error {
 	var installed [][]string
-	for _, rule := range orderedSourceRules(cfg, action) {
+	for _, rule := range rules {
 		if err := m.command(ctx, "ip", append([]string{"-4", "rule", action}, rule...)...); err != nil {
 			if action == "add" {
 				recovery, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -248,7 +252,7 @@ func (m *Manager) EnableProfile(ctx context.Context, cfg ProfileConfig) (result 
 	}
 	m.configureReloadHook()
 	if m.enabled {
-		if m.profile != nil && m.profile.ClientIP != "" && cfg.ClientSubnet != "" {
+		if m.profile != nil && ((m.profile.ClientIP != "" && cfg.ClientSubnet != "") || routerNATUpgrade(*m.profile, cfg)) {
 			return m.expandScopeLocked(ctx, cfg)
 		}
 		if m.profile != nil && *m.profile == cfg {

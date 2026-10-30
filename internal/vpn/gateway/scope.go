@@ -85,7 +85,10 @@ func (m *Manager) validateRouterScope(cfg ProfileConfig) error {
 func sourceRules(cfg ProfileConfig) [][]string {
 	rules := [][]string{}
 	if cfg.ClientSubnet != "" {
-		rules = append(rules, []string{"priority", "18038", "from", cfg.ManagerIP + "/32", "iif", cfg.LANInterface, "table", "main", "protocol", "99"}, []string{"priority", "18039", "from", cfg.RouterIP + "/32", "iif", cfg.LANInterface, "table", "main", "protocol", "99"})
+		rules = append(rules, []string{"priority", "18038", "from", cfg.ManagerIP + "/32", "iif", cfg.LANInterface, "table", "main", "protocol", "99"})
+		if !cfg.RouterNAT {
+			rules = append(rules, []string{"priority", "18039", "from", cfg.RouterIP + "/32", "iif", cfg.LANInterface, "table", "main", "protocol", "99"})
+		}
 	}
 	return append(rules, []string{"priority", profilePriority, "from", cfg.sourcePrefix(), "iif", cfg.LANInterface, "table", profileTable, "protocol", "99"})
 }
@@ -136,8 +139,17 @@ func profileNATBatch(cfg ProfileConfig) string {
 	scope := "ip saddr " + cfg.sourcePrefix()
 	destination := "ip daddr " + cfg.sourcePrefix()
 	if cfg.ClientSubnet != "" {
-		scope += fmt.Sprintf(" ip saddr != { %s, %s }", cfg.RouterIP, cfg.ManagerIP) + " ip daddr != { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }"
-		destination += fmt.Sprintf(" ip daddr != { %s, %s }", cfg.RouterIP, cfg.ManagerIP)
+		if cfg.RouterNAT {
+			scope += " ip saddr != " + cfg.ManagerIP
+		} else {
+			scope += fmt.Sprintf(" ip saddr != { %s, %s }", cfg.RouterIP, cfg.ManagerIP)
+		}
+		scope += " ip daddr != { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }"
+		if cfg.RouterNAT {
+			destination += " ip daddr != " + cfg.ManagerIP
+		} else {
+			destination += fmt.Sprintf(" ip daddr != { %s, %s }", cfg.RouterIP, cfg.ManagerIP)
+		}
 	}
 	return fmt.Sprintf("add table inet %s { comment %q; }\nadd chain inet %s postrouting { type nat hook postrouting priority 100; }\nadd rule inet %s postrouting iifname %q oifname %q %s masquerade\nadd chain inet %s output { type filter hook output priority 0; }\nadd rule inet %s output oifname %q %s icmp type redirect drop\n", profileNFT, profileOwner, profileNFT, profileNFT, cfg.LANInterface, cfg.LANInterface, scope, profileNFT, profileNFT, cfg.LANInterface, destination)
 }
@@ -158,4 +170,29 @@ func orderedSourceRules(cfg ProfileConfig, action string) [][]string {
 		}
 	}
 	return rules
+}
+
+func routerNATUpgrade(old, next ProfileConfig) bool {
+	if old.ClientSubnet == "" || old.RouterNAT || !next.RouterNAT {
+		return false
+	}
+	withoutNAT := next
+	withoutNAT.RouterNAT = false
+	return old == withoutNAT
+}
+func ruleDifference(left, right [][]string) [][]string {
+	var result [][]string
+	for _, a := range left {
+		found := false
+		for _, b := range right {
+			if fmt.Sprint(a) == fmt.Sprint(b) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, a)
+		}
+	}
+	return result
 }

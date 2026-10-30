@@ -19,6 +19,7 @@
   let gwProviderName = '';
   let gwMode = 'router';
   let gwSubnet = '192.168.1.0/24';
+  let gwRouterNAT = true;
   let gwRouterIP = '192.168.1.1';
   let gwManagerIP = '192.168.1.40';
   let gwClientIP = '192.168.1.71';
@@ -47,7 +48,7 @@
       routingProfile = routeData.profile || null;
       health = healthData;
       gatewayStatus = gwData;
-      if (gwData.client_subnet) {gwMode='router';gwSubnet=gwData.client_subnet;gwRouterIP=gwData.router_ip;gwManagerIP=gwData.manager_ip;gwLAN=gwData.lan_interface;}
+      if (gwData.client_subnet) {gwMode='router';gwSubnet=gwData.client_subnet;gwRouterNAT=!!gwData.router_nat;gwRouterIP=gwData.router_ip;gwManagerIP=gwData.manager_ip;gwLAN=gwData.lan_interface;}
       if (gwData.client_ip) {gwMode = 'profile'; gwClientIP = gwData.client_ip; if (gwData.lan_interface) gwLAN = gwData.lan_interface;}
       loading = false;
 
@@ -126,7 +127,7 @@
     try {
       gwBusy = true;
       await post('/gateway/enable', gwMode === 'router'
-        ? {mode:'router', client_subnet:gwSubnet.trim(),router_ip:gwRouterIP.trim(),manager_ip:gwManagerIP.trim(),lan_interface:gwLAN.trim()}
+        ? {mode:'router', client_subnet:gwSubnet.trim(),router_nat:gwRouterNAT,router_ip:gwRouterIP.trim(),manager_ip:gwManagerIP.trim(),lan_interface:gwLAN.trim()}
         : gwMode === 'profile'
         ? {mode: 'profile', client_ip: gwClientIP.trim(), lan_interface: gwLAN.trim()}
         : {provider_name: gwProviderName});
@@ -210,7 +211,7 @@
     <!-- Gateway Control -->
     <div class="section">
       <h2>Шлюз VPN Manager</h2>
-      <p>Выбирайте устройства в политике Keenetic «VPN Manager»: роутер направит их трафик на этот сервер. В режиме выбора на роутере добавлять IP каждого устройства в менеджер не нужно. Активный профиль распределяет трафик между VPN и прямым выходом.</p>
+      <p>Выбирайте устройства в политике Keenetic «VPN_Manager»: роутер направит их трафик на этот сервер. В режиме выбора на роутере добавлять IP каждого устройства в менеджер не нужно. Активный профиль распределяет трафик между VPN и прямым выходом.</p>
       <div class="gateway-box">
         <div class="gateway-status">
           <span class="badge" class:badge-up={gatewayStatus.enabled} class:badge-down={!gatewayStatus.enabled}>
@@ -221,7 +222,7 @@
           {/if}
         </div>
         {#if gatewayStatus.client_ip}<span>Пилот: {gatewayStatus.client_ip}</span>{/if}
-        {#if gatewayStatus.client_subnet}<p>Устройства выбираются на роутере · LAN: {gatewayStatus.client_subnet}<br />Исключены: роутер {gatewayStatus.router_ip}, менеджер {gatewayStatus.manager_ip}. IPv6 автоматически не перехватывается.</p>{/if}
+        {#if gatewayStatus.client_subnet}<p>Устройства выбираются на роутере · LAN: {gatewayStatus.client_subnet}<br />{#if gatewayStatus.router_nat}Keenetic передаёт выбранный трафик от {gatewayStatus.router_ip}. Исключён собственный трафик менеджера {gatewayStatus.manager_ip}.{:else}Исключены: роутер {gatewayStatus.router_ip}, менеджер {gatewayStatus.manager_ip}.{/if} IPv6 автоматически не перехватывается.</p>{/if}
         {#if gatewayStatus.error}<span class="error-hint">{gatewayStatus.error}</span>{/if}
         <div class="gateway-actions">
           {#if !gatewayStatus.enabled}
@@ -231,6 +232,7 @@
               <option value="nat">Прежний NAT через VPN</option>
             </select>
             {#if gwMode === 'router'}
+              <label><input type="checkbox" bind:checked={gwRouterNAT} disabled={!!gatewayStatus.client_subnet} /> Совместимость с NAT Keenetic</label>
               <label>Подсеть LAN <input class="input" bind:value={gwSubnet} disabled={!!gatewayStatus.client_subnet} /></label>
               <label>IP роутера <input class="input" bind:value={gwRouterIP} disabled={!!gatewayStatus.client_subnet} /></label>
               <label>IP менеджера <input class="input" bind:value={gwManagerIP} disabled={!!gatewayStatus.client_subnet} /></label>
@@ -258,6 +260,13 @@
       </div>
     </div>
 
+    {#if gatewayStatus.client_subnet && gatewayStatus.enabled && !gatewayStatus.router_nat}
+      <div class="section">
+        <h3>Совместимость с NAT Keenetic</h3>
+        <p>При пересылке через LAN Keenetic может подменять адрес выбранных устройств на свой. Включите совместимость, чтобы правила профиля применялись и к этому трафику.</p>
+        <button class="btn btn-primary" disabled={gwBusy} onclick={() => {gwMode='router';gwRouterNAT=true;enableGateway();}}>Включить совместимость Keenetic</button>
+      </div>
+    {/if}
     {#if gatewayStatus.client_ip && gatewayStatus.enabled}
       <div class="section">
         <h3>Перейти к выбору устройств только в Keenetic</h3>

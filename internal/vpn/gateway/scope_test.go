@@ -239,3 +239,80 @@ func TestSubnetRuleMatchesLinuxSeparateSourceLength(t *testing.T) {
 		t.Fatal("existing Linux subnet rule would be re-added during recovery")
 	}
 }
+
+func routerNATConfig(t *testing.T) ProfileConfig {
+	t.Helper()
+	var cfg ProfileConfig
+	if err := json.Unmarshal([]byte(`{"client_subnet":"192.168.1.0/24","router_ip":"192.168.1.1","manager_ip":"192.168.1.40","lan_interface":"eth0","router_nat":true}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+func TestRouterNATAcceptsTranslatedClientSource(t *testing.T) {
+	m, _, h := gatewayFixture(t)
+	withLAN(m, h)
+	if err := m.EnableProfile(context.Background(), routerNATConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	commands := strings.Join(h.commands, "\n")
+	if strings.Contains(commands, "from 192.168.1.1/32 iif eth0 table main") {
+		t.Fatal("translated client source still bypasses proxy")
+	}
+	if strings.Contains(commands, "ip saddr != { 192.168.1.1,") {
+		t.Fatal("NAT fallback excludes translated client source")
+	}
+	if strings.Contains(commands, "ip daddr != { 192.168.1.1,") {
+		t.Fatal("redirect protection excludes translated source")
+	}
+	if !strings.Contains(commands, "from 192.168.1.40/32 iif eth0 table main") {
+		t.Fatal("manager source no longer excluded")
+	}
+}
+func TestRouterScopeCanUpgradeToNATWithoutDuplicateRules(t *testing.T) {
+	m, h := scopedFixture(t)
+	ctx := context.Background()
+	if err := m.EnableProfile(ctx, routerConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.EnableProfile(ctx, routerNATConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.rules) != 2 {
+		t.Fatalf("obsolete router bypass retained: %v", h.rules)
+	}
+	if err := m.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.rules) != 2 {
+		t.Fatal("restore duplicated NAT rules")
+	}
+}
+
+func TestRouterNATUpgradeFailureRestoresPreviousScope(t *testing.T) {
+	for _, failure := range []string{"delete table inet vpn_manager_profile", "rule del priority 18039"} {
+		t.Run(failure, func(t *testing.T) {
+			m, h := scopedFixture(t)
+			ctx := context.Background()
+			old := routerConfig(t)
+			if err := m.EnableProfile(ctx, old); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := os.ReadFile(m.statePath)
+			nat := h.nat
+			h.fail = failure
+			if err := m.EnableProfile(ctx, routerNATConfig(t)); err == nil {
+				t.Fatal("ignored failed NAT upgrade")
+			}
+			after, _ := os.ReadFile(m.statePath)
+			if string(before) != string(after) || h.nat != nat || len(h.rules) != 3 || *m.profile != old {
+				t.Fatal("previous scope was not restored")
+			}
+			if err := m.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if !m.Status().Ready {
+				t.Fatal("old scope did not recover")
+			}
+		})
+	}
+}

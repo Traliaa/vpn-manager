@@ -20,6 +20,7 @@ type GatewayStatus struct {
 	Ready        bool   `json:"ready"`
 	ClientIP     string `json:"client_ip,omitempty"`
 	ClientSubnet string `json:"client_subnet,omitempty"`
+	RouterNAT    bool   `json:"router_nat,omitempty"`
 	RouterIP     string `json:"router_ip,omitempty"`
 	ManagerIP    string `json:"manager_ip,omitempty"`
 	Error        string `json:"error,omitempty"`
@@ -208,6 +209,7 @@ func (m *Manager) Status() GatewayStatus {
 			}
 			return ""
 		}(),
+		RouterNAT: m.profile != nil && m.profile.RouterNAT,
 		ClientSubnet: func() string {
 			if m.profile != nil {
 				return m.profile.ClientSubnet

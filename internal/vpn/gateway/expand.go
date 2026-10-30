@@ -24,9 +24,14 @@ func (m *Manager) expandScopeLocked(ctx context.Context, cfg ProfileConfig) erro
 		return fmt.Errorf("recover pilot gateway before expanding scope")
 	}
 	// The previous pilot must belong to this connected LAN.
-	if !subnetContains(cfg.ClientSubnet, old.ClientIP) || old.ClientIP == cfg.RouterIP || old.ClientIP == cfg.ManagerIP {
+	if old.ClientIP != "" && (!subnetContains(cfg.ClientSubnet, old.ClientIP) || old.ClientIP == cfg.RouterIP || old.ClientIP == cfg.ManagerIP) {
 		return fmt.Errorf("pilot client must belong to the new LAN scope")
 	}
+	if old.ClientIP == "" && !routerNATUpgrade(old, cfg) {
+		return fmt.Errorf("only enabling router NAT compatibility is supported in place")
+	}
+	added := ruleDifference(orderedSourceRules(cfg, "add"), sourceRules(old))
+	removed := ruleDifference(orderedSourceRules(old, "del"), sourceRules(cfg))
 	raw, err := os.ReadFile(m.statePath)
 	if err != nil {
 		return err
@@ -54,21 +59,21 @@ func (m *Manager) expandScopeLocked(ctx context.Context, cfg ProfileConfig) erro
 			// Keep interception while restoring the old source and NAT, then remove
 			// broader rules. A failed rollback is visible and never reported ready.
 			if oldRemoved {
-				cleanup = append(cleanup, m.sourceRule(recovery, "add", old))
+				cleanup = append(cleanup, m.changeSourceRules(recovery, "add", reversedRules(removed)))
 			}
 			if natReplaced {
 				_, e := m.run(recovery, "nft", []string{"-f", "-"}, "delete table inet "+profileNFT+"\n"+profileNATBatch(old))
 				cleanup = append(cleanup, e)
 			}
 			if newRules {
-				cleanup = append(cleanup, m.sourceRule(recovery, "del", cfg))
+				cleanup = append(cleanup, m.changeSourceRules(recovery, "del", reversedRules(added)))
 			}
 			if e := errors.Join(cleanup...); e != nil {
 				m.ready = false
 				result = errors.Join(result, fmt.Errorf("scope rollback incomplete: %w", e))
 			}
 		}()
-		if err := m.sourceRule(ctx, "add", cfg); err != nil {
+		if err := m.changeSourceRules(ctx, "add", added); err != nil {
 			return err
 		}
 		newRules = true
@@ -76,7 +81,7 @@ func (m *Manager) expandScopeLocked(ctx context.Context, cfg ProfileConfig) erro
 			return err
 		}
 		natReplaced = true
-		if err := m.sourceRule(ctx, "del", old); err != nil {
+		if err := m.changeSourceRules(ctx, "del", removed); err != nil {
 			return err
 		}
 		oldRemoved = true
@@ -87,4 +92,12 @@ func (m *Manager) expandScopeLocked(ctx context.Context, cfg ProfileConfig) erro
 		m.ready = true
 		return nil
 	})
+}
+
+func reversedRules(rules [][]string) [][]string {
+	out := make([][]string, len(rules))
+	for i, r := range rules {
+		out[len(rules)-1-i] = r
+	}
+	return out
 }

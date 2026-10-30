@@ -26,6 +26,7 @@ type enableRequest struct {
 	Mode         string `json:"mode"`
 	ClientIP     string `json:"client_ip"`
 	ClientSubnet string `json:"client_subnet"`
+	RouterNAT    bool   `json:"router_nat"`
 	RouterIP     string `json:"router_ip"`
 	ManagerIP    string `json:"manager_ip"`
 	LANInterface string `json:"lan_interface"`
@@ -51,14 +52,14 @@ func (h *GatewayHandlers) Enable(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "router mode requires connected private client_subnet, distinct router_ip and manager_ip, and lan_interface, without client_ip or provider_name")
 			return
 		}
-		if err := h.gw.EnableProfile(r.Context(), gateway.ProfileConfig{ClientSubnet: req.ClientSubnet, RouterIP: req.RouterIP, ManagerIP: req.ManagerIP, LANInterface: req.LANInterface}); err != nil {
+		if err := h.gw.EnableProfile(r.Context(), gateway.ProfileConfig{ClientSubnet: req.ClientSubnet, RouterNAT: req.RouterNAT, RouterIP: req.RouterIP, ManagerIP: req.ManagerIP, LANInterface: req.LANInterface}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to enable router gateway: "+err.Error())
 			return
 		}
 		h.Status(w, r)
 		return
 	}
-	if req.ClientSubnet != "" || req.RouterIP != "" || req.ManagerIP != "" {
+	if req.ClientSubnet != "" || req.RouterIP != "" || req.ManagerIP != "" || req.RouterNAT {
 		writeError(w, http.StatusBadRequest, "router scope requires router mode")
 		return
 	}
@@ -142,6 +143,7 @@ func (h *GatewayHandlers) Status(w http.ResponseWriter, r *http.Request) {
 		"interface":     status.Interface,
 		"client_ip":     status.ClientIP,
 		"client_subnet": status.ClientSubnet,
+		"router_nat":    status.RouterNAT,
 		"router_ip":     status.RouterIP,
 		"manager_ip":    status.ManagerIP,
 		"lan_interface": status.LANInterface,

@@ -56,9 +56,10 @@ func TestLinuxTrafficHelper(t *testing.T) {
 		t.Fatal("unknown helper mode")
 	}
 }
-func TestLinuxProfileTraffic(t *testing.T) { testLinuxTraffic(t, false) }
-func TestLinuxRouterTraffic(t *testing.T)  { testLinuxTraffic(t, true) }
-func testLinuxTraffic(t *testing.T, routerMode bool) {
+func TestLinuxProfileTraffic(t *testing.T)   { testLinuxTraffic(t, false, false) }
+func TestLinuxRouterTraffic(t *testing.T)    { testLinuxTraffic(t, true, false) }
+func TestLinuxRouterNATTraffic(t *testing.T) { testLinuxTraffic(t, true, true) }
+func testLinuxTraffic(t *testing.T, routerMode, natMode bool) {
 	if os.Getenv("VPN_MANAGER_LINUX_TEST") != "1" {
 		t.Skip("requires isolated Linux namespace")
 	}
@@ -161,13 +162,32 @@ func testLinuxTraffic(t *testing.T, routerMode bool) {
 	request("192.168.1.71", "blocked.test", false)
 	request("192.168.1.72", "blocked.test", true)
 	if routerMode {
-		if err = m.EnableProfile(ctx, ProfileConfig{ClientSubnet: "192.168.1.0/24", RouterIP: "192.168.1.1", ManagerIP: "192.168.1.40", LANInterface: "eth0"}); err != nil {
+		routerIP := "192.168.1.1"
+		if natMode {
+			routerIP = "192.168.1.254"
+			command("nsenter", "-t", strconv.Itoa(clientNS.Process.Pid), "-n", "ip", "addr", "add", routerIP+"/32", "dev", "client0")
+		}
+		scope := ProfileConfig{ClientSubnet: "192.168.1.0/24", RouterIP: routerIP, ManagerIP: "192.168.1.40", LANInterface: "eth0"}
+		if err = m.EnableProfile(ctx, scope); err != nil {
 			t.Fatal(err)
+		}
+		if natMode {
+			request(routerIP, "blocked.test", true)
+			scope.RouterNAT = true
+			if err = m.EnableProfile(ctx, scope); err != nil {
+				t.Fatal(err)
+			}
+			request(routerIP, "allowed.test", true)
+			request(routerIP, "blocked.test", false)
 		}
 		request("192.168.1.71", "blocked.test", false)
 		request("192.168.1.72", "allowed.test", true)
 		request("192.168.1.72", "blocked.test", false)
-		for _, source := range []string{"192.168.1.1", "192.168.1.40"} {
+		infra := []string{"192.168.1.40"}
+		if !natMode {
+			infra = append(infra, routerIP)
+		}
+		for _, source := range infra {
 			args := []string{"-4", "route", "get", "203.0.113.2", "from", source}
 			// Locally generated own-source traffic uses no incoming interface;
 			// Linux rejects a spoofed own source arriving on eth0 by default.
@@ -196,6 +216,9 @@ func testLinuxTraffic(t *testing.T, routerMode bool) {
 	request("192.168.1.71", "blocked.test", false)
 	if routerMode {
 		request("192.168.1.72", "blocked.test", false)
+		if natMode {
+			request("192.168.1.254", "blocked.test", false)
+		}
 	}
 	if err = ctrl.Stop(ctx); err != nil {
 		t.Fatal(err)
@@ -228,6 +251,9 @@ func testLinuxTraffic(t *testing.T, routerMode bool) {
 	request("192.168.1.71", "blocked.test", true)
 	if routerMode {
 		request("192.168.1.72", "blocked.test", true)
+		if natMode {
+			request("192.168.1.254", "blocked.test", true)
+		}
 	}
 	if err = m.Release(ctx); err != nil {
 		t.Fatal(err)
