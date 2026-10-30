@@ -168,7 +168,13 @@ func testLinuxTraffic(t *testing.T, routerMode bool) {
 		request("192.168.1.72", "allowed.test", true)
 		request("192.168.1.72", "blocked.test", false)
 		for _, source := range []string{"192.168.1.1", "192.168.1.40"} {
-			route := command("ip", "-4", "route", "get", "203.0.113.2", "from", source, "iif", "eth0")
+			args := []string{"-4", "route", "get", "203.0.113.2", "from", source}
+			// Locally generated own-source traffic uses no incoming interface;
+			// Linux rejects a spoofed own source arriving on eth0 by default.
+			if source != "192.168.1.40" {
+				args = append(args, "iif", "eth0")
+			}
+			route := command("ip", args...)
 			if strings.Contains(route, "vmtun0") {
 				t.Fatalf("infrastructure source captured: %s", route)
 			}

@@ -118,7 +118,7 @@ func containsSlash(s string) bool {
 	return false
 }
 func (m *Manager) reconcileSourceRules(ctx context.Context, action string, cfg ProfileConfig, records []string) error {
-	for _, rule := range sourceRules(cfg) {
+	for _, rule := range orderedSourceRules(cfg, action) {
 		present := rulePresent(records, rule)
 		if (action == "add" && !present) || (action == "del" && present) {
 			if err := m.command(ctx, "ip", append([]string{"-4", "rule", action}, rule...)...); err != nil {
@@ -142,4 +142,16 @@ func subnetContains(raw, host string) bool {
 	p, e := netip.ParsePrefix(raw)
 	a, e2 := netip.ParseAddr(host)
 	return e == nil && e2 == nil && p.Contains(a)
+}
+
+// Installation protects infrastructure first; deletion removes broad capture
+// first, so partial failure never leaves it active without exclusions.
+func orderedSourceRules(cfg ProfileConfig, action string) [][]string {
+	rules := sourceRules(cfg)
+	if action == "del" {
+		for i, j := 0, len(rules)-1; i < j; i, j = i+1, j-1 {
+			rules[i], rules[j] = rules[j], rules[i]
+		}
+	}
+	return rules
 }

@@ -60,14 +60,19 @@ func TestRouterScopeRejectsInvalidOrUnconnectedLAN(t *testing.T) {
 }
 
 type scopeHarness struct {
-	base  *profileHarness
-	rules []map[string]any
-	nat   string
-	fail  string
+	base     *profileHarness
+	rules    []map[string]any
+	nat      string
+	fail     string
+	failures []string
 }
 
 func (s *scopeHarness) run(ctx context.Context, name string, args []string, input string) ([]byte, error) {
 	cmd := name + " " + strings.Join(args, " ")
+	if len(s.failures) > 0 && strings.Contains(cmd+" "+input, s.failures[0]) {
+		s.failures = s.failures[1:]
+		return nil, fmt.Errorf("injected sequenced failure")
+	}
 	if s.fail != "" && strings.Contains(cmd+" "+input, s.fail) {
 		s.fail = ""
 		return nil, fmt.Errorf("injected failure")
@@ -163,5 +168,66 @@ func TestExpandScopeFailureRestoresPilot(t *testing.T) {
 				t.Fatalf("pilot not restored: rules=%v status=%#v", h.rules, m.Status())
 			}
 		})
+	}
+}
+
+func TestExpandIncompleteRuleRollbackIsNotReady(t *testing.T) {
+	m, h := scopedFixture(t)
+	ctx := context.Background()
+	if err := m.EnableProfile(ctx, ProfileConfig{ClientIP: "192.168.1.71", LANInterface: "eth0"}); err != nil {
+		t.Fatal(err)
+	}
+	h.failures = []string{"rule add priority 18040 from 192.168.1.0/24", "rule del priority 18039"}
+	if err := m.EnableProfile(ctx, routerConfig(t)); err == nil {
+		t.Fatal("ignored partial rollback")
+	}
+	if m.Status().Ready {
+		t.Fatal("incomplete rollback reported ready")
+	}
+}
+func TestDisableFailurePreservesInfrastructureBypass(t *testing.T) {
+	for _, failure := range []string{"rule del priority 18040", "rule del priority 18039"} {
+		t.Run(failure, func(t *testing.T) {
+			m, h := scopedFixture(t)
+			ctx := context.Background()
+			if err := m.EnableProfile(ctx, routerConfig(t)); err != nil {
+				t.Fatal(err)
+			}
+			h.fail = failure
+			if err := m.Disable(ctx); err == nil {
+				t.Fatal("ignored failed disable")
+			}
+			if m.Status().Ready {
+				t.Fatal("partial disable reported ready")
+			}
+			capture, manager, router := false, false, false
+			for _, r := range h.rules {
+				switch fmt.Sprint(r["priority"]) {
+				case "18040":
+					capture = true
+				case "18038":
+					manager = true
+				case "18039":
+					router = true
+				}
+			}
+			if capture && (!manager || !router) {
+				t.Fatal("capture retained without infrastructure bypass")
+			}
+		})
+	}
+}
+func TestScopeDeletionFailureKeepsInfrastructureWhileCaptureExists(t *testing.T) {
+	m, h := scopedFixture(t)
+	ctx := context.Background()
+	if err := m.EnableProfile(ctx, routerConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	h.fail = "rule del priority 18040"
+	if err := m.sourceRule(ctx, "del", routerConfig(t)); err == nil {
+		t.Fatal("ignored removal failure")
+	}
+	if len(h.rules) != 3 {
+		t.Fatalf("removed exclusions before capture: %v", h.rules)
 	}
 }

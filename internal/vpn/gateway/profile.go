@@ -192,7 +192,7 @@ func (m *Manager) ensureProfileNAT(ctx context.Context, cfg ProfileConfig) (bool
 }
 func (m *Manager) sourceRule(ctx context.Context, action string, cfg ProfileConfig) error {
 	var installed [][]string
-	for _, rule := range sourceRules(cfg) {
+	for _, rule := range orderedSourceRules(cfg, action) {
 		if err := m.command(ctx, "ip", append([]string{"-4", "rule", action}, rule...)...); err != nil {
 			if action == "add" {
 				recovery, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -201,8 +201,13 @@ func (m *Manager) sourceRule(ctx context.Context, action string, cfg ProfileConf
 				for i := len(installed) - 1; i >= 0; i-- {
 					cleanup = append(cleanup, m.command(recovery, "ip", append([]string{"-4", "rule", "del"}, installed[i]...)...))
 				}
-				return errors.Join(append([]error{err}, cleanup...)...)
+				if cleanupErr := errors.Join(cleanup...); cleanupErr != nil {
+					m.ready = false
+					return errors.Join(err, fmt.Errorf("source rule rollback incomplete: %w", cleanupErr))
+				}
+				return err
 			}
+			m.ready = false
 			return err
 		}
 		installed = append(installed, rule)
@@ -349,6 +354,7 @@ func (m *Manager) disableProfileLocked(ctx context.Context) error {
 		return fmt.Errorf("gateway network objects changed; refusing cleanup")
 	}
 	// Retrying a partially completed disable removes only objects still present.
+	m.ready = false
 	if len(current.Rules) > 0 {
 		if err = m.reconcileSourceRules(ctx, "del", cfg, current.Rules); err != nil {
 			return err
