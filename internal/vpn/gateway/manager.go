@@ -19,6 +19,9 @@ type GatewayStatus struct {
 	Enabled      bool   `json:"enabled"`
 	Ready        bool   `json:"ready"`
 	ClientIP     string `json:"client_ip,omitempty"`
+	ClientSubnet string `json:"client_subnet,omitempty"`
+	RouterIP     string `json:"router_ip,omitempty"`
+	ManagerIP    string `json:"manager_ip,omitempty"`
 	Error        string `json:"error,omitempty"`
 	LANInterface string `json:"lan_interface,omitempty"`
 	Interface    string `json:"interface,omitempty"`
@@ -202,6 +205,24 @@ func (m *Manager) Status() GatewayStatus {
 		ClientIP: func() string {
 			if m.profile != nil {
 				return m.profile.ClientIP
+			}
+			return ""
+		}(),
+		ClientSubnet: func() string {
+			if m.profile != nil {
+				return m.profile.ClientSubnet
+			}
+			return ""
+		}(),
+		RouterIP: func() string {
+			if m.profile != nil {
+				return m.profile.RouterIP
+			}
+			return ""
+		}(),
+		ManagerIP: func() string {
+			if m.profile != nil {
+				return m.profile.ManagerIP
 			}
 			return ""
 		}(),

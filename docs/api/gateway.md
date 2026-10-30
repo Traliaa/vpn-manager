@@ -36,3 +36,20 @@ A provider update validates replacements before disconnecting a working provider
 - Verify reboot/recreation, partial network-command failure and proxy/VPN outages.
 - Verify router policy support, original client source address, address reservation and IPv6.
 - Check iPhone direct sites, VPN sites, DNS and QUIC; verify other devices remain unchanged.
+
+
+## Router-selected clients
+
+`POST /gateway/enable` accepts an additive mode:
+
+```json
+{"mode":"router","client_subnet":"192.168.1.0/24","router_ip":"192.168.1.1","manager_ip":"192.168.1.40","lan_interface":"eth0"}
+```
+
+The canonical private IPv4 prefix (/16 through /30) and manager address must match the actual selected LAN interface. Router and manager addresses must be distinct non-network/non-broadcast addresses in that subnet. Additional manager aliases within the subnet are rejected until explicit bypass support is provided. `client_ip` and `provider_name` cannot be combined with router mode.
+
+Only forwarded source traffic arriving on that LAN interface is intercepted. The router and manager sources bypass capture through owned priorities 18038/18039; subnet capture uses 18040 and table 51840. Private destinations continue through existing routes; direct fallback NAT excludes private destinations and infrastructure sources. Locally created manager traffic is unaffected. Unselected devices do not send their traffic to this server and remain unaffected. No individual client registration is required here: assign the VPN Manager policy in Keenetic. IPv6 remains outside this IPv4 mode and must be verified separately before enabling an external IPv6 path.
+
+Status adds `client_subnet`, `router_ip`, `manager_ip`; `mode` is `router` while such scope is retained, including disabled direct mode. Existing single-client requests/state stay supported. An enabled pilot may expand to a matching connected LAN scope through the same enable endpoint. The transaction validates ownership, stages broader rules, atomically replaces the owned nft table, removes the pilot rule, and persists the new scope. Failures restore the previous scope; incomplete rollback is an error and never reports ready. Other scope changes require coordinated disable/release.
+
+Disable retains direct forwarding/NAT for all router-selected clients. Release requires `router_policy_removed=true` for **all** assigned clients. Keep the manager itself on its WAN-only Keenetic policy. Selecting devices changes who sends packets to the gateway; it does not authorize new inbound access or expose the panel publicly.

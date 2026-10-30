@@ -17,7 +17,10 @@
   // Gateway state
   let gatewayStatus = { enabled: false, interface: '' };
   let gwProviderName = '';
-  let gwMode = 'profile';
+  let gwMode = 'router';
+  let gwSubnet = '192.168.1.0/24';
+  let gwRouterIP = '192.168.1.1';
+  let gwManagerIP = '192.168.1.40';
   let gwClientIP = '192.168.1.71';
   let gwLAN = 'eth0';
   let gwBusy = false;
@@ -44,6 +47,7 @@
       routingProfile = routeData.profile || null;
       health = healthData;
       gatewayStatus = gwData;
+      if (gwData.client_subnet) {gwMode='router';gwSubnet=gwData.client_subnet;gwRouterIP=gwData.router_ip;gwManagerIP=gwData.manager_ip;gwLAN=gwData.lan_interface;}
       if (gwData.client_ip) {gwMode = 'profile'; gwClientIP = gwData.client_ip; if (gwData.lan_interface) gwLAN = gwData.lan_interface;}
       loading = false;
 
@@ -121,7 +125,9 @@
     }
     try {
       gwBusy = true;
-      await post('/gateway/enable', gwMode === 'profile'
+      await post('/gateway/enable', gwMode === 'router'
+        ? {mode:'router', client_subnet:gwSubnet.trim(),router_ip:gwRouterIP.trim(),manager_ip:gwManagerIP.trim(),lan_interface:gwLAN.trim()}
+        : gwMode === 'profile'
         ? {mode: 'profile', client_ip: gwClientIP.trim(), lan_interface: gwLAN.trim()}
         : {provider_name: gwProviderName});
       showToast('✅ Gateway включён');
@@ -203,26 +209,33 @@
 
     <!-- Gateway Control -->
     <div class="section">
-      <h2>Шлюз для устройства</h2>
-      <p>Роутер направляет выбранное устройство на этот сервер. Активный профиль распределяет трафик между VPN и прямым выходом.</p>
+      <h2>Шлюз VPN Manager</h2>
+      <p>Выбирайте устройства в политике Keenetic «VPN Manager»: роутер направит их трафик на этот сервер. В режиме выбора на роутере добавлять IP каждого устройства в менеджер не нужно. Активный профиль распределяет трафик между VPN и прямым выходом.</p>
       <div class="gateway-box">
         <div class="gateway-status">
           <span class="badge" class:badge-up={gatewayStatus.enabled} class:badge-down={!gatewayStatus.enabled}>
-            {gatewayStatus.enabled ? (gatewayStatus.ready ? 'Активен' : 'Не готов') : (gatewayStatus.client_ip ? 'Прямой выход' : 'Выключен')}
+            {gatewayStatus.enabled ? (gatewayStatus.ready ? 'Активен' : 'Не готов') : ((gatewayStatus.client_ip || gatewayStatus.client_subnet) ? 'Прямой выход' : 'Выключен')}
           </span>
           {#if gatewayStatus.interface}
             <span class="gateway-iface">Интерфейс: <strong>{gatewayStatus.interface}</strong></span>
           {/if}
         </div>
-        {#if gatewayStatus.client_ip}<span>Устройство: {gatewayStatus.client_ip}</span>{/if}
+        {#if gatewayStatus.client_ip}<span>Пилот: {gatewayStatus.client_ip}</span>{/if}
+        {#if gatewayStatus.client_subnet}<p>Устройства выбираются на роутере · LAN: {gatewayStatus.client_subnet}<br />Исключены: роутер {gatewayStatus.router_ip}, менеджер {gatewayStatus.manager_ip}. IPv6 автоматически не перехватывается.</p>{/if}
         {#if gatewayStatus.error}<span class="error-hint">{gatewayStatus.error}</span>{/if}
         <div class="gateway-actions">
           {#if !gatewayStatus.enabled}
-            <select class="input select" bind:value={gwMode} aria-label="Режим шлюза" disabled={!!gatewayStatus.client_ip}>
-              <option value="profile">Распределять по профилю</option>
+            <select class="input select" bind:value={gwMode} aria-label="Режим шлюза" disabled={!!(gatewayStatus.client_ip || gatewayStatus.client_subnet)}>
+              <option value="router">Устройства выбираются на роутере</option>
+              <option value="profile">Пилот: одно устройство</option>
               <option value="nat">Прежний NAT через VPN</option>
             </select>
-            {#if gwMode === 'profile'}
+            {#if gwMode === 'router'}
+              <label>Подсеть LAN <input class="input" bind:value={gwSubnet} disabled={!!gatewayStatus.client_subnet} /></label>
+              <label>IP роутера <input class="input" bind:value={gwRouterIP} disabled={!!gatewayStatus.client_subnet} /></label>
+              <label>IP менеджера <input class="input" bind:value={gwManagerIP} disabled={!!gatewayStatus.client_subnet} /></label>
+              <label>LAN интерфейс <input class="input" bind:value={gwLAN} disabled={!!gatewayStatus.client_subnet} /></label>
+            {:else if gwMode === 'profile'}
               <label>IP устройства <input class="input" bind:value={gwClientIP} placeholder="192.168.1.71" disabled={!!gatewayStatus.client_ip} /></label>
               <label>LAN интерфейс <input class="input" bind:value={gwLAN} placeholder="eth0" /></label>
             {:else}
@@ -233,7 +246,7 @@
               {/each}
             </select>
             {/if}
-            <button class="btn btn-primary" onclick={enableGateway} disabled={gwBusy || (gwMode === 'nat' ? !gwProviderName : !gwClientIP || !gwLAN)}>
+            <button class="btn btn-primary" onclick={enableGateway} disabled={gwBusy || (gwMode === 'nat' ? !gwProviderName : gwMode === 'router' ? !gwSubnet || !gwRouterIP || !gwManagerIP || !gwLAN : !gwClientIP || !gwLAN)}>
               🚀 Включить
             </button>
           {:else}
@@ -245,9 +258,19 @@
       </div>
     </div>
 
-    {#if gatewayStatus.client_ip && !gatewayStatus.enabled}
-      <p>Прямой выход сохранён, пока роутер направляет устройство сюда. Для полного удаления сначала верните обычную политику на роутере.</p>
-      <label><input type="checkbox" bind:checked={gwReleaseConfirmed} /> Устройство уже возвращено на обычную политику роутера</label>
+    {#if gatewayStatus.client_ip && gatewayStatus.enabled}
+      <div class="section">
+        <h3>Перейти к выбору устройств только в Keenetic</h3>
+        <p>Действующие правила профиля сохранятся. После перехода подключайте устройства назначением политики на роутере.</p>
+        <label>Подсеть LAN <input class="input" bind:value={gwSubnet} /></label>
+        <label>IP роутера <input class="input" bind:value={gwRouterIP} /></label>
+        <label>IP менеджера <input class="input" bind:value={gwManagerIP} /></label>
+        <button class="btn btn-primary" disabled={gwBusy} onclick={() => {gwMode='router'; enableGateway();}}>Включить выбор на роутере</button>
+      </div>
+    {/if}
+    {#if (gatewayStatus.client_ip || gatewayStatus.client_subnet) && !gatewayStatus.enabled}
+      <p>Прямой выход сохранён, пока роутер направляет устройства сюда. Для полного удаления сначала верните обычную политику на роутере.</p>
+      <label><input type="checkbox" bind:checked={gwReleaseConfirmed} /> Все устройства уже возвращены на обычную политику роутера</label>
       <button class="btn btn-ghost" onclick={releaseGateway} disabled={!gwReleaseConfirmed || gwBusy}>Удалить настройки шлюза</button>
     {/if}
     <!-- Interface Status -->

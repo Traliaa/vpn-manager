@@ -86,7 +86,7 @@ func (m *Manager) networkSnapshot(ctx context.Context) (profileState, error) {
 		return state, err
 	}
 	state.Rules, err = canonicalObjects(raw, func(o map[string]any) bool {
-		return fmt.Sprint(o["table"]) == profileTable || fmt.Sprint(o["priority"]) == profilePriority
+		return fmt.Sprint(o["table"]) == profileTable || ownedPriority(o["priority"])
 	})
 	if err != nil {
 		return state, err
@@ -177,10 +177,8 @@ func (m *Manager) restoreLocked(ctx context.Context) (result error) {
 			}
 		}
 	}
-	if len(current.Rules) == 0 {
-		if err = m.sourceRule(ctx, "add", saved.Config); err != nil {
-			return err
-		}
+	if err = m.reconcileSourceRules(ctx, "add", saved.Config, current.Rules); err != nil {
+		return err
 	}
 	if m.profileReady == nil || !m.profileReady() {
 		return fmt.Errorf("active routing profile is not ready; client remains blocked")
@@ -212,10 +210,8 @@ func (m *Manager) restoreLocked(ctx context.Context) (result error) {
 				return err
 			}
 		}
-		if len(current.Rules) == 0 {
-			if err = m.sourceRule(ctx, "add", saved.Config); err != nil {
-				return err
-			}
+		if err = m.reconcileSourceRules(ctx, "add", saved.Config, current.Rules); err != nil {
+			return err
 		}
 		m.ifaceName = "vmtun0"
 		m.ready = true

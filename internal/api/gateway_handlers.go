@@ -25,6 +25,9 @@ type enableRequest struct {
 	ProviderName string `json:"provider_name"`
 	Mode         string `json:"mode"`
 	ClientIP     string `json:"client_ip"`
+	ClientSubnet string `json:"client_subnet"`
+	RouterIP     string `json:"router_ip"`
+	ManagerIP    string `json:"manager_ip"`
 	LANInterface string `json:"lan_interface"`
 }
 
@@ -36,8 +39,27 @@ func (h *GatewayHandlers) Enable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Mode != "" && req.Mode != "profile" && req.Mode != "nat" {
+	if req.Mode != "" && req.Mode != "profile" && req.Mode != "nat" && req.Mode != "router" {
 		writeError(w, http.StatusBadRequest, "unknown gateway mode")
+		return
+	}
+	if req.Mode == "router" {
+		p, e := netip.ParsePrefix(req.ClientSubnet)
+		router, e1 := netip.ParseAddr(req.RouterIP)
+		manager, e2 := netip.ParseAddr(req.ManagerIP)
+		if req.ProviderName != "" || req.ClientIP != "" || e != nil || !p.Addr().Is4() || !p.Addr().IsPrivate() || p != p.Masked() || p.Bits() < 16 || p.Bits() > 30 || e1 != nil || e2 != nil || !p.Contains(router) || !p.Contains(manager) || router == manager || req.LANInterface == "" {
+			writeError(w, http.StatusBadRequest, "router mode requires connected private client_subnet, distinct router_ip and manager_ip, and lan_interface, without client_ip or provider_name")
+			return
+		}
+		if err := h.gw.EnableProfile(r.Context(), gateway.ProfileConfig{ClientSubnet: req.ClientSubnet, RouterIP: req.RouterIP, ManagerIP: req.ManagerIP, LANInterface: req.LANInterface}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to enable router gateway: "+err.Error())
+			return
+		}
+		h.Status(w, r)
+		return
+	}
+	if req.ClientSubnet != "" || req.RouterIP != "" || req.ManagerIP != "" {
+		writeError(w, http.StatusBadRequest, "router scope requires router mode")
 		return
 	}
 	if req.Mode == "profile" {
@@ -119,10 +141,16 @@ func (h *GatewayHandlers) Status(w http.ResponseWriter, r *http.Request) {
 		"enabled":       status.Enabled,
 		"interface":     status.Interface,
 		"client_ip":     status.ClientIP,
+		"client_subnet": status.ClientSubnet,
+		"router_ip":     status.RouterIP,
+		"manager_ip":    status.ManagerIP,
 		"lan_interface": status.LANInterface,
 		"ready":         status.Ready,
 		"error":         status.Error,
 		"mode": func() string {
+			if status.ClientSubnet != "" {
+				return "router"
+			}
 			if status.ClientIP != "" {
 				return "profile"
 			}

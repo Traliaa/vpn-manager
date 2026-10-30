@@ -56,7 +56,9 @@ func TestLinuxTrafficHelper(t *testing.T) {
 		t.Fatal("unknown helper mode")
 	}
 }
-func TestLinuxProfileTraffic(t *testing.T) {
+func TestLinuxProfileTraffic(t *testing.T) { testLinuxTraffic(t, false) }
+func TestLinuxRouterTraffic(t *testing.T)  { testLinuxTraffic(t, true) }
+func testLinuxTraffic(t *testing.T, routerMode bool) {
 	if os.Getenv("VPN_MANAGER_LINUX_TEST") != "1" {
 		t.Skip("requires isolated Linux namespace")
 	}
@@ -65,7 +67,7 @@ func TestLinuxProfileTraffic(t *testing.T) {
 	if e1 != nil || e2 != nil || current == initial {
 		t.Fatal("refusing traffic test outside isolated namespace")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
 	command := func(name string, args ...string) string {
 		t.Helper()
@@ -158,23 +160,69 @@ func TestLinuxProfileTraffic(t *testing.T) {
 	request("192.168.1.71", "allowed.test", true)
 	request("192.168.1.71", "blocked.test", false)
 	request("192.168.1.72", "blocked.test", true)
+	if routerMode {
+		if err = m.EnableProfile(ctx, ProfileConfig{ClientSubnet: "192.168.1.0/24", RouterIP: "192.168.1.1", ManagerIP: "192.168.1.40", LANInterface: "eth0"}); err != nil {
+			t.Fatal(err)
+		}
+		request("192.168.1.71", "blocked.test", false)
+		request("192.168.1.72", "allowed.test", true)
+		request("192.168.1.72", "blocked.test", false)
+		for _, source := range []string{"192.168.1.1", "192.168.1.40"} {
+			route := command("ip", "-4", "route", "get", "203.0.113.2", "from", source, "iif", "eth0")
+			if strings.Contains(route, "vmtun0") {
+				t.Fatalf("infrastructure source captured: %s", route)
+			}
+		}
+		route := command("ip", "-4", "route", "get", "192.168.1.200", "from", "192.168.1.72", "iif", "eth0")
+		if strings.Contains(route, "vmtun0") {
+			t.Fatal("local LAN captured")
+		}
+		// A router-unselected client sends straight to the upstream router, bypassing
+		// this gateway even though its address is inside the accepted LAN scope.
+		command("nsenter", "-t", strconv.Itoa(clientNS.Process.Pid), "-n", "ip", "route", "add", "203.0.113.2/32", "via", "192.168.1.1")
+		request("192.168.1.72", "blocked.test", true)
+		command("nsenter", "-t", strconv.Itoa(clientNS.Process.Pid), "-n", "ip", "route", "del", "203.0.113.2/32")
+	}
 	if err = ctrl.Reload(ctx); err != nil {
 		t.Fatal(err)
 	}
 	request("192.168.1.71", "allowed.test", true)
 	request("192.168.1.71", "blocked.test", false)
+	if routerMode {
+		request("192.168.1.72", "blocked.test", false)
+	}
 	if err = ctrl.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
 	request("192.168.1.71", "allowed.test", false)
+	if routerMode {
+		request("192.168.1.72", "allowed.test", false)
+	}
 	if err = m.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
 	request("192.168.1.71", "allowed.test", true)
+	if routerMode {
+		// Reconstruct from persisted state as a fresh manager while retaining the
+		// same owned proxy, like service startup after profile reconstruction.
+		restored := NewManager(zap.NewNop())
+		restored.profileCtrl = ctrl
+		restored.SetProfileReadiness(func() bool { return true })
+		restored.statePath = m.statePath
+		if err = restored.Restore(ctx); err != nil {
+			t.Fatal(err)
+		}
+		m = restored
+		request("192.168.1.72", "allowed.test", true)
+		request("192.168.1.72", "blocked.test", false)
+	}
 	if err = m.Disable(ctx); err != nil {
 		t.Fatal(err)
 	}
 	request("192.168.1.71", "blocked.test", true)
+	if routerMode {
+		request("192.168.1.72", "blocked.test", true)
+	}
 	if err = m.Release(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -25,7 +25,10 @@ var errObjectMissing = errors.New("network object missing")
 var interfacePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,15}$`)
 
 type ProfileConfig struct {
-	ClientIP     string `json:"client_ip"`
+	ClientIP     string `json:"client_ip,omitempty"`
+	ClientSubnet string `json:"client_subnet,omitempty"`
+	RouterIP     string `json:"router_ip,omitempty"`
+	ManagerIP    string `json:"manager_ip,omitempty"`
 	LANInterface string `json:"lan_interface"`
 }
 type profileController interface {
@@ -69,6 +72,12 @@ func interfaceAddresses() ([]netip.Addr, error) {
 	return out, nil
 }
 func (m *Manager) validateProfile(cfg ProfileConfig) error {
+	if cfg.ClientSubnet != "" {
+		return m.validateRouterScope(cfg)
+	}
+	if cfg.RouterIP != "" || cfg.ManagerIP != "" {
+		return fmt.Errorf("router fields require client_subnet")
+	}
 	ip, err := netip.ParseAddr(cfg.ClientIP)
 	if err != nil || !ip.Is4() || !ip.IsPrivate() || !ip.IsGlobalUnicast() {
 		return fmt.Errorf("client must be one private IPv4 address")
@@ -126,7 +135,7 @@ func (m *Manager) profilePreflight(ctx context.Context) error {
 		return err
 	}
 	for _, r := range rules {
-		if fmt.Sprint(r["priority"]) == profilePriority || fmt.Sprint(r["table"]) == profileTable {
+		if ownedPriority(r["priority"]) || fmt.Sprint(r["table"]) == profileTable {
 			return fmt.Errorf("gateway routing rule is occupied")
 		}
 	}
@@ -177,13 +186,30 @@ func (m *Manager) ensureProfileNAT(ctx context.Context, cfg ProfileConfig) (bool
 	if !errors.Is(err, errObjectMissing) {
 		return false, err
 	}
-	batch := fmt.Sprintf("add table inet %s { comment %q; }\nadd chain inet %s postrouting { type nat hook postrouting priority 100; }\nadd rule inet %s postrouting iifname %q oifname %q ip saddr %s/32 masquerade\nadd chain inet %s output { type filter hook output priority 0; }\nadd rule inet %s output oifname %q ip daddr %s/32 icmp type redirect drop\n", profileNFT, profileOwner, profileNFT, profileNFT, cfg.LANInterface, cfg.LANInterface, cfg.ClientIP, profileNFT, profileNFT, cfg.LANInterface, cfg.ClientIP)
+	batch := profileNATBatch(cfg)
 	_, err = m.run(ctx, "nft", []string{"-f", "-"}, batch)
 	return err == nil, err
 }
 func (m *Manager) sourceRule(ctx context.Context, action string, cfg ProfileConfig) error {
-	return m.command(ctx, "ip", "-4", "rule", action, "priority", profilePriority, "from", cfg.ClientIP+"/32", "iif", cfg.LANInterface, "table", profileTable, "protocol", "99")
+	var installed [][]string
+	for _, rule := range sourceRules(cfg) {
+		if err := m.command(ctx, "ip", append([]string{"-4", "rule", action}, rule...)...); err != nil {
+			if action == "add" {
+				recovery, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var cleanup []error
+				for i := len(installed) - 1; i >= 0; i-- {
+					cleanup = append(cleanup, m.command(recovery, "ip", append([]string{"-4", "rule", "del"}, installed[i]...)...))
+				}
+				return errors.Join(append([]error{err}, cleanup...)...)
+			}
+			return err
+		}
+		installed = append(installed, rule)
+	}
+	return nil
 }
+
 func profileRoutes() [][]string {
 	return [][]string{
 		{"blackhole", "default", "metric", "32767"},
@@ -217,6 +243,9 @@ func (m *Manager) EnableProfile(ctx context.Context, cfg ProfileConfig) (result 
 	}
 	m.configureReloadHook()
 	if m.enabled {
+		if m.profile != nil && m.profile.ClientIP != "" && cfg.ClientSubnet != "" {
+			return m.expandScopeLocked(ctx, cfg)
+		}
 		if m.profile != nil && *m.profile == cfg {
 			running, err := m.profileCtrl.IsRunning(ctx)
 			if err != nil {
@@ -321,7 +350,7 @@ func (m *Manager) disableProfileLocked(ctx context.Context) error {
 	}
 	// Retrying a partially completed disable removes only objects still present.
 	if len(current.Rules) > 0 {
-		if err = m.sourceRule(ctx, "del", cfg); err != nil {
+		if err = m.reconcileSourceRules(ctx, "del", cfg, current.Rules); err != nil {
 			return err
 		}
 	}
