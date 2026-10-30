@@ -31,6 +31,10 @@ func (p *ParsedConfig) ToWireGuardConfig() wireguard.Config {
 // ToAmneziaWGConfig converts the parsed config to an amneziawg.Config.
 func (p *ParsedConfig) ToAmneziaWGConfig() amneziawg.Config {
 	cfg := amneziawg.Config{
+		ListenPort:       p.Interface.ListenPort,
+		TransportPadding: p.Interface.S4,
+		H1:               p.Interface.H1, H2: p.Interface.H2, H3: p.Interface.H3, H4: p.Interface.H4,
+		I2: p.Interface.Raw["i2"], I3: p.Interface.Raw["i3"], I4: p.Interface.Raw["i4"], I5: p.Interface.Raw["i5"],
 		PrivateKey:          p.Interface.PrivateKey,
 		Address:             p.Interface.Address,
 		DNS:                 p.Interface.DNS,

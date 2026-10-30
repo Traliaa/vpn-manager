@@ -9,6 +9,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/vpn-manager ./cmd/vpn-manager
 
+# Official AmneziaWG userspace client, pinned to v3.1.20260828.
+FROM golang:1.26-alpine AS awg-builder
+RUN apk add --no-cache git ca-certificates
+WORKDIR /awg
+RUN git init && git remote add origin https://github.com/amnezia-vpn/amneziawg-go.git && \
+    git fetch --depth 1 origin b5928efb6ca19f0153958460c3d141f04abc5c2e && \
+    git checkout --detach FETCH_HEAD
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /bin/amneziawg-go .
+
 FROM alpine:3.21
 
 # Install runtime deps + sing-box
@@ -33,6 +42,7 @@ RUN case "$TARGETARCH" in \
 RUN mkdir -p /etc/sing-box
 
 COPY --from=builder /bin/vpn-manager /usr/local/bin/vpn-manager
+COPY --from=awg-builder /bin/amneziawg-go /usr/local/bin/amneziawg-go
 COPY migrations/ /migrations/
 
 EXPOSE 8080

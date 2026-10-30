@@ -39,6 +39,7 @@ type InterfaceSection struct {
 	ResponseJunkPkts  int
 	TransportHeader   string
 	TransportPktLen   int
+	S4                int
 	H1                string
 	H2                string
 	H3                string
@@ -69,6 +70,7 @@ func Parse(input string) (*ParsedConfig, error) {
 	lines := strings.Split(input, "\n")
 
 	var currentSection string
+	peerSections := 0
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
@@ -80,6 +82,12 @@ func Parse(input string) (*ParsedConfig, error) {
 		// Section header
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			currentSection = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+			if currentSection == "peer" {
+				peerSections++
+				if peerSections > 1 {
+					return nil, fmt.Errorf("multiple peer sections are not supported; import one provider per peer")
+				}
+			}
 			continue
 		}
 
@@ -110,6 +118,21 @@ func Parse(input string) (*ParsedConfig, error) {
 	}
 	cfg.IsAmneziaWG = indicatorCount >= DetectionThreshold
 
+	// Reject malformed numeric fields rather than silently replacing them with zero.
+	for _, key := range []string{"mtu", "listenport", "jc", "jmin", "jmax", "s1", "s2", "s3", "s4"} {
+		if raw, ok := cfg.Interface.Raw[key]; ok {
+			if n, err := strconv.Atoi(raw); err != nil || n < 0 || n > 65535 {
+				return nil, fmt.Errorf("invalid numeric interface parameter %s", key)
+			}
+		}
+	}
+	for _, peer := range cfg.Peers {
+		if raw, ok := peer.Raw["persistentkeepalive"]; ok {
+			if n, err := strconv.Atoi(raw); err != nil || n < 0 || n > 65535 {
+				return nil, fmt.Errorf("invalid persistent keepalive")
+			}
+		}
+	}
 	// Populate typed fields from raw maps
 	populateInterface(cfg)
 	for i := range cfg.Peers {
@@ -156,7 +179,7 @@ func populateInterface(cfg *ParsedConfig) {
 		cfg.Interface.InitJunkPackets, _ = strconv.Atoi(m["s1"])
 		cfg.Interface.ResponseJunkPkts, _ = strconv.Atoi(m["s2"])
 		cfg.Interface.TransportPktLen, _ = strconv.Atoi(m["s3"])
-		// S4 doesn't map directly, store in Raw
+		cfg.Interface.S4, _ = strconv.Atoi(m["s4"])
 		cfg.Interface.TransportHeader = m["i1"]
 		cfg.Interface.H1 = m["h1"]
 		cfg.Interface.H2 = m["h2"]

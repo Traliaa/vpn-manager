@@ -129,3 +129,6 @@ func (p *SingBoxProvider) HealthCheck(ctx context.Context) error {
 	_ = time.Now()
 	return nil
 }
+
+// ValidateConfig validates an outbound before replacing a working provider.
+func (p *SingBoxProvider) ValidateConfig() error { _, err := p.outbound.BuildOutbound(); return err }

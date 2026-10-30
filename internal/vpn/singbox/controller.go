@@ -8,7 +8,9 @@ package singbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/Traliaa/vpn-manager/internal/vpn/managedprocess"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,6 +46,9 @@ type Controller struct {
 
 	activeOutbounds []Outbound
 	logger          *zap.Logger
+	process         managedprocess.Process
+	rollback        *configSnapshot
+	reloadHook      func(context.Context, bool) error
 }
 
 // Config holds the settings for the sing-box Controller.
@@ -89,7 +94,9 @@ func NewController(cfg Config, logger *zap.Logger) (*Controller, error) {
 		}
 	} else {
 		// Load current config if it exists
-		_ = c.loadBaseTemplate(cfg.ConfigPath)
+		if err := c.loadBaseTemplate(cfg.ConfigPath); err != nil {
+			return nil, fmt.Errorf("load existing sing-box config: %w", err)
+		}
 	}
 
 	return c, nil
@@ -111,6 +118,29 @@ func (c *Controller) loadBaseTemplate(path string) error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
+	// Reserve persisted provider targets as blocked until provider sync rebuilds
+	// each real outbound. This lets startup validate multi-provider profiles
+	// without temporarily sending a pending VPN target directly.
+	if values, ok := full["outbounds"].([]any); ok {
+		seen := map[string]bool{}
+		for _, raw := range values {
+			value, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid persisted outbound")
+			}
+			tag, ok := value["tag"].(string)
+			if !ok || tag == "" {
+				return fmt.Errorf("persisted outbound has no tag")
+			}
+			if seen[tag] {
+				return fmt.Errorf("duplicate persisted outbound tag")
+			}
+			seen[tag] = true
+			if tag != "direct" && tag != "block" {
+				c.activeOutbounds = append(c.activeOutbounds, BlockedOutbound(tag))
+			}
+		}
+	}
 	// Keep everything except outbounds (we manage those)
 	for k, v := range full {
 		if k != "outbounds" {
@@ -124,54 +154,41 @@ func (c *Controller) loadBaseTemplate(path string) error {
 func (c *Controller) SetOutbounds(ctx context.Context, outbounds []Outbound) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	return c.setOutboundsLocked(ctx, outbounds)
+	return c.updateLocked(ctx, outbounds, c.baseTemplate)
 }
-
-// AddOutbound adds or replaces an outbound by its Tag, then applies the config.
 func (c *Controller) AddOutbound(ctx context.Context, ob Outbound) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// Check if tag already exists — replace it
-	tag := ob.Tag()
-	for i, existing := range c.activeOutbounds {
-		if existing.Tag() == tag {
-			c.activeOutbounds[i] = ob
-			return c.applyConfigLocked(ctx)
-		}
-	}
-
-	// Append new outbound
-	c.activeOutbounds = append(c.activeOutbounds, ob)
-	return c.applyConfigLocked(ctx)
-}
-
-// RemoveOutbound removes an outbound by tag, then applies the config.
-func (c *Controller) RemoveOutbound(ctx context.Context, tag string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	idx := -1
-	for i, ob := range c.activeOutbounds {
-		if ob.Tag() == tag {
-			idx = i
+	next := append([]Outbound(nil), c.activeOutbounds...)
+	found := false
+	for i, old := range next {
+		if old.Tag() == ob.Tag() {
+			next[i] = ob
+			found = true
 			break
 		}
 	}
-	if idx == -1 {
-		return nil // not found, nothing to remove
+	if !found {
+		next = append(next, ob)
 	}
-
-	c.activeOutbounds = append(c.activeOutbounds[:idx], c.activeOutbounds[idx+1:]...)
-	return c.applyConfigLocked(ctx)
+	return c.updateLocked(ctx, next, c.baseTemplate)
 }
-
-// GetOutbound finds an outbound by tag.
+func (c *Controller) RemoveOutbound(ctx context.Context, tag string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := make([]Outbound, 0, len(c.activeOutbounds))
+	for _, ob := range c.activeOutbounds {
+		if ob.Tag() == tag {
+			next = append(next, BlockedOutbound(tag))
+		} else {
+			next = append(next, ob)
+		}
+	}
+	return c.updateLocked(ctx, next, c.baseTemplate)
+}
 func (c *Controller) GetOutbound(tag string) (Outbound, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
 	for _, ob := range c.activeOutbounds {
 		if ob.Tag() == tag {
 			return ob, true
@@ -179,115 +196,64 @@ func (c *Controller) GetOutbound(tag string) (Outbound, bool) {
 	}
 	return nil, false
 }
-
-// ListOutbounds returns all currently active outbounds.
 func (c *Controller) ListOutbounds() []Outbound {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	result := make([]Outbound, len(c.activeOutbounds))
-	copy(result, c.activeOutbounds)
-	return result
+	return append([]Outbound(nil), c.activeOutbounds...)
 }
 
-// setOutboundsLocked replaces all outbounds without acquiring the lock (caller must hold mu).
-func (c *Controller) setOutboundsLocked(ctx context.Context, outbounds []Outbound) error {
-	c.activeOutbounds = make([]Outbound, len(outbounds))
-	copy(c.activeOutbounds, outbounds)
-	return c.applyConfigLocked(ctx)
+// Reload affects only the process created by this controller. A failed restart
+// restores the last accepted configuration and its runtime when one was running.
+func (c *Controller) Reload(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reloadLocked(ctx)
 }
-
-// applyConfigLocked writes the current config and reloads sing-box (caller must hold mu).
-func (c *Controller) applyConfigLocked(ctx context.Context) error {
-	// Build outbound JSON
-	outboundList := make([]map[string]any, 0, len(c.activeOutbounds))
-	for _, ob := range c.activeOutbounds {
-		built, err := ob.BuildOutbound()
-		if err != nil {
-			return fmt.Errorf("build outbound %q: %w", ob.Tag(), err)
+func (c *Controller) reloadLocked(ctx context.Context) error {
+	if err := c.validatePath(ctx, c.configPath); err != nil {
+		if c.rollback != nil {
+			restoreErr := c.restoreLocked(c.rollback)
+			if restoreErr == nil {
+				c.rollback = nil
+			}
+			return errors.Join(err, restoreErr)
 		}
-		outboundList = append(outboundList, built)
+		return err
 	}
-
-	// Build full config
-	cfg := c.buildConfig(outboundList)
-	configBytes, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
+	wasRunning := c.process.Running()
+	if err := c.process.Stop(ctx); err != nil {
+		return err
 	}
-
-	// Ensure the config directory exists
-	configDir := filepath.Dir(c.configPath)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("create config dir %s: %w", configDir, err)
+	if err := c.startRuntimeLocked(ctx); err != nil {
+		original := err
+		if c.rollback != nil {
+			if restoreErr := c.restoreLocked(c.rollback); restoreErr != nil {
+				return errors.Join(original, restoreErr)
+			}
+			c.rollback = nil
+			if wasRunning {
+				recovery, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				return errors.Join(original, c.startRuntimeLocked(recovery))
+			}
+		}
+		return original
 	}
-
-	// Backup current config first
-	if err := c.backupConfig(); err != nil {
-		c.logger.Warn("config backup failed (non-fatal)", zap.Error(err))
-	}
-
-	// Write to disk
-	if err := os.WriteFile(c.configPath, configBytes, 0644); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	c.logger.Info("sing-box config written",
-		zap.String("path", c.configPath),
-		zap.Int("outbounds", len(outboundList)),
-	)
+	c.rollback = nil
 	return nil
 }
-
-// Reload signals sing-box to reload its configuration.
-// In Docker, sends SIGHUP to reload, or starts sing-box if not running.
-func (c *Controller) Reload(ctx context.Context) error {
-	// Try SIGHUP (graceful reload)
-	if err := exec.CommandContext(ctx, "pkill", "-SIGHUP", "sing-box").Run(); err == nil {
-		c.logger.Info("sing-box reloaded via SIGHUP")
+func (c *Controller) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.process.Stop(ctx)
+}
+func (c *Controller) Start(ctx context.Context) error {
+	if c.process.Running() {
 		return nil
 	}
-
-	// Not running — start it in background
-	startCmd := exec.Command(c.binaryPath, "run", "-c", c.configPath)
-	startCmd.Stdout = nil
-	startCmd.Stderr = nil
-	if err := startCmd.Start(); err != nil {
-		return fmt.Errorf("start sing-box: %w", err)
-	}
-
-	c.logger.Info("sing-box started in background")
-	return nil
+	return c.Reload(ctx)
 }
-
-// Stop stops the sing-box process.
-func (c *Controller) Stop(ctx context.Context) error {
-	if err := exec.CommandContext(ctx, "pkill", "sing-box").Run(); err != nil {
-		return fmt.Errorf("stop sing-box: %w", err)
-	}
-	c.logger.Info("sing-box stopped")
-	return nil
-}
-
-// Start starts the sing-box process in background.
-func (c *Controller) Start(ctx context.Context) error {
-	startCmd := exec.Command(c.binaryPath, "run", "-c", c.configPath)
-	startCmd.Stdout = nil
-	startCmd.Stderr = nil
-	if err := startCmd.Start(); err != nil {
-		return fmt.Errorf("start sing-box: %w", err)
-	}
-	c.logger.Info("sing-box started in background")
-	return nil
-}
-
-// IsRunning checks if sing-box process is running.
-func (c *Controller) IsRunning(ctx context.Context) (bool, error) {
-	if err := exec.CommandContext(ctx, "pgrep", "sing-box").Run(); err != nil {
-		return false, nil
-	}
-	return true, nil
-}
+func (c *Controller) IsRunning(ctx context.Context) (bool, error) { return c.process.Running(), nil }
 
 // Status returns the current runtime info from sing-box API if enabled.
 type Status struct {
@@ -364,11 +330,12 @@ func (c *Controller) fetchAPIData(ctx context.Context, path string, target any) 
 
 // ValidateConfig runs `sing-box check` to validate the generated config.
 func (c *Controller) ValidateConfig(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, c.binaryPath, "check", "-c", c.configPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("config validation: %w\n%s", err, string(out))
+	return c.validatePath(ctx, c.configPath)
+}
+func (c *Controller) validatePath(ctx context.Context, path string) error {
+	if err := exec.CommandContext(ctx, c.binaryPath, "check", "-c", path).Run(); err != nil {
+		return fmt.Errorf("sing-box configuration rejected: %w", err)
 	}
-	c.logger.Debug("sing-box config validated")
 	return nil
 }
 
@@ -399,18 +366,4 @@ func (c *Controller) ensureDefaults(cfg map[string]any) {
 			"timestamp": true,
 		}
 	}
-}
-
-// backupConfig creates a timestamped backup of the current config.
-func (c *Controller) backupConfig() error {
-	data, err := os.ReadFile(c.configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	backupPath := fmt.Sprintf("%s.bak.%d", c.configPath, time.Now().Unix())
-	return os.WriteFile(backupPath, data, 0644)
 }

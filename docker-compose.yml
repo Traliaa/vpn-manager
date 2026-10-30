@@ -45,6 +45,7 @@ services:
     network_mode: "host"
     volumes:
       - /etc/localtime:/etc/localtime:ro
+      - gateway-data:/var/lib/vpn-manager
 
   nginx:
     build:
@@ -69,5 +70,6 @@ services:
       - uptime-kuma-data:/app/data
 
 volumes:
+  gateway-data:
   pgdata:
   uptime-kuma-data:
