@@ -101,7 +101,11 @@ func rulePresent(records []string, args []string) bool {
 		}
 		src := fmt.Sprint(value["src"])
 		if !containsSlash(src) {
-			src += "/32"
+			length := 32
+			if n, ok := value["srclen"].(float64); ok {
+				length = int(n)
+			}
+			src += fmt.Sprintf("/%d", length)
 		}
 		if fmt.Sprint(value["priority"]) == args[1] && src == args[3] && value["iif"] == args[5] && table == args[7] {
 			return true

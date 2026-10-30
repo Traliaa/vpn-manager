@@ -53,7 +53,7 @@ func runCommand(ctx context.Context, name string, args []string, input string) (
 		return nil, errObjectMissing
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s failed: %w", name, err)
+		return nil, fmt.Errorf("%s %v failed: %w: %s", name, args, err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
 }

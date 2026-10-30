@@ -231,3 +231,11 @@ func TestScopeDeletionFailureKeepsInfrastructureWhileCaptureExists(t *testing.T)
 		t.Fatalf("removed exclusions before capture: %v", h.rules)
 	}
 }
+
+func TestSubnetRuleMatchesLinuxSeparateSourceLength(t *testing.T) {
+	rule := sourceRules(routerConfig(t))[2]
+	records := []string{`{"priority":18040,"src":"192.168.1.0","srclen":24,"iif":"eth0","table":51840,"protocol":"openr"}`}
+	if !rulePresent(records, rule) {
+		t.Fatal("existing Linux subnet rule would be re-added during recovery")
+	}
+}
